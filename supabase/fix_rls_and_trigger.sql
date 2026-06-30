@@ -14,16 +14,17 @@ security definer          -- roda como superuser, ignora RLS
 set search_path = public
 as $$
 begin
-  insert into public.profiles (id, full_name, role, user_group)
+  insert into public.profiles (id, name, email, role, user_group)
   values (
     new.id,
     coalesce(
-      new.raw_user_meta_data->>'full_name',
       new.raw_user_meta_data->>'name',
+      new.raw_user_meta_data->>'full_name',
       split_part(new.email, '@', 1)   -- usa parte antes do @ como fallback
     ),
-    coalesce(new.raw_user_meta_data->>'role', 'coordenador'),
-    coalesce(new.raw_user_meta_data->>'user_group', 'escritorio')
+    new.email,
+    coalesce(new.raw_user_meta_data->>'role', 'coordenador')::user_role,
+    coalesce(new.raw_user_meta_data->>'user_group', 'escritorio')::user_group
   )
   on conflict (id) do nothing;  -- idempotente, não quebra se já existir
   return new;
@@ -42,58 +43,25 @@ create trigger on_auth_user_created
 -- ── 2. FIX: para usuários já existentes sem linha em profiles ───────────────
 -- Insere perfil para quem já criou conta mas não tem linha em profiles
 
-insert into public.profiles (id, full_name, role, user_group)
+insert into public.profiles (id, name, email, role, user_group)
 select
   u.id,
-  coalesce(u.raw_user_meta_data->>'full_name', split_part(u.email, '@', 1)),
-  'coordenador',
-  'escritorio'
+  coalesce(
+    u.raw_user_meta_data->>'name',
+    u.raw_user_meta_data->>'full_name',
+    split_part(u.email, '@', 1)
+  ),
+  u.email,
+  'coordenador'::user_role,
+  'escritorio'::user_group
 from auth.users u
 where not exists (
   select 1 from public.profiles p where p.id = u.id
 );
 
 
--- ── 3. GARANTIR que as políticas RLS existem (idempotente) ──────────────────
--- Se o schema.sql já foi executado, estas são no-ops. Se não foi, cria agora.
+-- ── 3. STORAGE: cria buckets e políticas ────────────────────────────────────
 
--- profiles: usuário vê/edita apenas o próprio perfil (mais seguro)
-do $$
-begin
-  -- Verifica se a policy já existe antes de criar
-  if not exists (
-    select 1 from pg_policies
-    where tablename = 'profiles' and policyname = 'Users can view own profile'
-  ) then
-    execute 'create policy "Users can view own profile" on profiles
-      for select using (auth.uid() = id)';
-  end if;
-
-  if not exists (
-    select 1 from pg_policies
-    where tablename = 'profiles' and policyname = 'Users can update own profile'
-  ) then
-    execute 'create policy "Users can update own profile" on profiles
-      for update using (auth.uid() = id) with check (auth.uid() = id)';
-  end if;
-
-  -- Permite que o trigger (security definer) insira, mas também permite
-  -- que usuários autenticados vejam outros perfis (necessário para mostrar
-  -- nome do projetista, revisor, etc.)
-  if not exists (
-    select 1 from pg_policies
-    where tablename = 'profiles' and policyname = 'Authenticated can read all profiles'
-  ) then
-    execute 'create policy "Authenticated can read all profiles" on profiles
-      for select using (auth.role() = ''authenticated'')';
-  end if;
-end $$;
-
-
--- ── 4. STORAGE: políticas para os buckets de PDF ────────────────────────────
--- Execute DEPOIS de criar os buckets em Dashboard > Storage
-
--- Bucket: drawings (PDFs/DWGs — leitura e upload para autenticados)
 insert into storage.buckets (id, name, public)
 values ('drawings', 'drawings', false)
 on conflict (id) do nothing;
@@ -106,7 +74,7 @@ insert into storage.buckets (id, name, public)
 values ('avatars', 'avatars', true)
 on conflict (id) do nothing;
 
--- Políticas de Storage (remova e recrie se já existirem)
+-- Políticas de Storage
 do $$
 begin
   if not exists (
