@@ -1,0 +1,55 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
+@import "tailwindcss";
+
+
+:root {
+  --navy: #1E3A5F;
+  --navy-mid: #2A4F7C;
+  --navy-light: #3B6FA0;
+  --orange: #F97316;
+  --orange-dark: #EA6C0A;
+  --slate: #64748B;
+  --surface: #0F1923;
+  --surface-mid: #162030;
+  --surface-card: #1C2B3A;
+  --surface-border: #243447;
+  --white: #FAFAFA;
+  --green: #22C55E;
+  --red: #EF4444;
+  --yellow: #EAB308;
+  --purple: #A855F7;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  font-family: 'Inter', sans-serif;
+  background-color: var(--surface);
+  color: var(--white);
+  margin: 0;
+  padding: 0;
+}
+
+.mono { font-family: 'JetBrains Mono', monospace; }
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: var(--surface-card); }
+::-webkit-scrollbar-thumb { background: var(--surface-border); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--navy-light); }
+
+/* PDF canvas */
+canvas { display: block; }
+
+/* Slider compare handle */
+.compare-slider { cursor: ew-resize; }
+
+/* Isometric cabinet */
+.iso-cell {
+  transition: all 0.2s ease;
+  cursor: pointer;
+}
+.iso-cell:hover {
+  filter: brightness(1.2);
+  transform: translateY(-2px);
+}
