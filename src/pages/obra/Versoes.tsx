@@ -5,11 +5,10 @@ import { DISCIPLINE_MAP } from '../../data/mockData'
 import { useDrawings } from '../../hooks/useDrawings'
 import { usePlotOrders } from '../../hooks/usePlotOrders'
 import { useApp } from '../../context/AppContext'
-import { SEED_PROJECT_ID } from '../../context/AppContext'
 
 export default function Versoes() {
   const { currentProject } = useApp()
-  const projectId = currentProject.id === 'proj-043' ? SEED_PROJECT_ID : currentProject.id
+  const projectId = currentProject.id
   const { drawings, usingMockData } = useDrawings(projectId)
   const { plotOrders } = usePlotOrders(projectId)
 

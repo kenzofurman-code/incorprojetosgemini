@@ -9,7 +9,6 @@ import {
 import { Card, StatCard, PageHeader, DisciplineDot, DataSourceBadge, Button } from '../../components/ui'
 import { useDashboard } from '../../hooks/useDashboard'
 import { useApp } from '../../context/AppContext'
-import { SEED_PROJECT_ID } from '../../context/AppContext'
 
 const RADIAN = Math.PI / 180
 const renderCustomLabel = ({ cx, cy, midAngle, innerRadius, outerRadius, percent }: any) => {
@@ -43,7 +42,7 @@ const CustomTooltip = ({ active, payload, label }: any) => {
 
 export default function Dashboard() {
   const { currentProject } = useApp()
-  const projectId = currentProject.id === 'proj-043' ? SEED_PROJECT_ID : currentProject.id
+  const projectId = currentProject.id
 
   const {
     stats, docsByDiscipline, docsByStatus, issuesByCategory, weeklyActivity,

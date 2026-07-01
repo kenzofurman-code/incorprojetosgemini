@@ -3,7 +3,7 @@ import { Calendar, AlertTriangle, CheckCircle, Clock, Plus, Loader2, AlertCircle
 import { Card, PageHeader, MilestoneStatusBadge, Button, DataSourceBadge } from '../../components/ui'
 import { DISCIPLINES, DISCIPLINE_MAP } from '../../data/mockData'
 import { useMilestones } from '../../hooks/useMilestones'
-import { useApp, SEED_PROJECT_ID, SEED_SCHEDULE_ID } from '../../context/AppContext'
+import { useApp } from '../../context/AppContext'
 import type { Milestone, MilestoneStatus, ProjectPhase } from '../../types'
 
 const PHASE_LABELS: Record<string, string> = {
@@ -310,7 +310,7 @@ function NewMilestoneForm({ projectId, scheduleId, onClose, onCreated }: {
 
 export default function Cronograma() {
   const { currentProject } = useApp()
-  const projectId = currentProject.id === 'proj-043' ? SEED_PROJECT_ID : currentProject.id
+  const projectId = currentProject.id
 
   const { milestones, loading, error, usingMockData, refresh } = useMilestones(projectId)
 
@@ -356,7 +356,7 @@ export default function Cronograma() {
       {showNewForm && (
         <NewMilestoneForm
           projectId={projectId}
-          scheduleId={SEED_SCHEDULE_ID}
+          scheduleId={currentProject.scheduleId || ''}
           onClose={() => setShowNewForm(false)}
           onCreated={refresh}
         />

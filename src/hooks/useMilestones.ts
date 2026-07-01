@@ -1,6 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
 import { listMilestones, createMilestone, type CreateMilestoneParams } from '../lib/queries'
-import { MOCK_MILESTONES } from '../data/mockData'
 import type { Milestone } from '../types'
 
 const SUPABASE_CONFIGURED = !!(
@@ -11,15 +10,14 @@ export function useMilestones(projectId: string) {
   const [milestones, setMilestones] = useState<Milestone[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [usingMockData, setUsingMockData] = useState(!SUPABASE_CONFIGURED)
+  const [usingMockData] = useState(!SUPABASE_CONFIGURED)
 
   const refresh = useCallback(async () => {
     setLoading(true)
     setError(null)
 
     if (!SUPABASE_CONFIGURED) {
-      setMilestones(MOCK_MILESTONES)
-      setUsingMockData(true)
+      setMilestones([])
       setLoading(false)
       return
     }
@@ -27,26 +25,20 @@ export function useMilestones(projectId: string) {
     try {
       const data = await listMilestones(projectId)
       setMilestones(data)
-      setUsingMockData(false)
     } catch (err) {
-      console.error('[useMilestones] Falha ao buscar do Supabase, usando dados de exemplo:', err)
-      setMilestones(MOCK_MILESTONES)
-      setUsingMockData(true)
+      console.error('[useMilestones] Erro ao buscar marcos:', err)
+      setMilestones([])
       setError(err instanceof Error ? err.message : 'Erro ao carregar cronograma')
     } finally {
       setLoading(false)
     }
   }, [projectId])
 
-  useEffect(() => {
-    refresh()
-  }, [refresh])
+  useEffect(() => { refresh() }, [refresh])
 
   const add = useCallback(async (params: CreateMilestoneParams) => {
     if (!SUPABASE_CONFIGURED) {
-      throw new Error(
-        'Supabase não configurado. Preencha VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY no .env.local para salvar marcos reais.'
-      )
+      throw new Error('Supabase não configurado.')
     }
     const newMilestone = await createMilestone(params)
     setMilestones(prev => [...prev, newMilestone].sort(

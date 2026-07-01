@@ -9,7 +9,6 @@ import { MOCK_DRAWINGS } from '../../data/mockData'
 import { useReviews } from '../../hooks/useReviews'
 import { useDrawings } from '../../hooks/useDrawings'
 import { useApp } from '../../context/AppContext'
-import { SEED_PROJECT_ID } from '../../context/AppContext'
 import type { Issue, IssueCategory } from '../../types'
 
 const CATEGORY_OPTIONS: { value: IssueCategory; label: string; color: string }[] = [
@@ -60,7 +59,7 @@ export default function Revisao() {
   const { id } = useParams()
   const navigate = useNavigate()
   const { currentUser, currentProject } = useApp()
-  const projectId = currentProject.id === 'proj-043' ? SEED_PROJECT_ID : currentProject.id
+  const projectId = currentProject.id
 
   // Load drawings to find the one being reviewed
   const { drawings } = useDrawings(projectId)

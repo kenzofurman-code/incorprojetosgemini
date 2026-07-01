@@ -4,14 +4,13 @@ import { ArrowLeft, ChevronLeft, ChevronRight, GitCompare, Info } from 'lucide-r
 import { Card, Button, PdfViewer } from '../../components/ui'
 import { useDrawings } from '../../hooks/useDrawings'
 import { useApp } from '../../context/AppContext'
-import { SEED_PROJECT_ID } from '../../context/AppContext'
 import { MOCK_DRAWINGS } from '../../data/mockData'
 
 export default function Comparar() {
   const { id } = useParams()
   const navigate = useNavigate()
   const { currentProject } = useApp()
-  const projectId = currentProject.id === 'proj-043' ? SEED_PROJECT_ID : currentProject.id
+  const projectId = currentProject.id
 
   const { drawings } = useDrawings(projectId)
   const drawing = (id ? drawings.find(d => d.id === id) : null) || MOCK_DRAWINGS[0]

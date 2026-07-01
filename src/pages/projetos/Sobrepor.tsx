@@ -4,7 +4,6 @@ import { ArrowLeft, Layers, Plus, Eye, EyeOff, Move, Palette } from 'lucide-reac
 import { Card, Button, PdfViewer } from '../../components/ui'
 import { useDrawings } from '../../hooks/useDrawings'
 import { useApp } from '../../context/AppContext'
-import { SEED_PROJECT_ID } from '../../context/AppContext'
 import { MOCK_DRAWINGS } from '../../data/mockData'
 
 const OVERLAY_COLORS = ['#EF4444','#22C55E','#F97316','#3B82F6','#EAB308','#8B5CF6','#06B6D4','#000000']
@@ -24,7 +23,7 @@ export default function Sobrepor() {
   const { id } = useParams()
   const navigate = useNavigate()
   const { currentProject } = useApp()
-  const projectId = currentProject.id === 'proj-043' ? SEED_PROJECT_ID : currentProject.id
+  const projectId = currentProject.id
   const { drawings } = useDrawings(projectId)
 
   const baseDrawing = (id ? drawings.find(d => d.id === id) : null) || MOCK_DRAWINGS[0]

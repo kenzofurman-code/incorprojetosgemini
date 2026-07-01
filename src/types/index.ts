@@ -173,6 +173,7 @@ export interface Project {
   endDate?: string
   status: 'ativo' | 'pausado' | 'concluido'
   photoUrl?: string
+  scheduleId?: string      // UUID of the linked schedule row
   disciplines: string[]   // array of discipline codes active
   floors: Floor[]
 }

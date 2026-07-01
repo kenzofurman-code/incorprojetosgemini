@@ -7,7 +7,6 @@ import { Card, PageHeader, Button, DataSourceBadge, QrScanner } from '../../comp
 import { usePlotOrders } from '../../hooks/usePlotOrders'
 import { useDrawings } from '../../hooks/useDrawings'
 import { useApp } from '../../context/AppContext'
-import { SEED_PROJECT_ID } from '../../context/AppContext'
 import type { PlotOrder } from '../../types'
 
 function StatusIcon({ status }: { status: PlotOrder['status'] }) {
@@ -165,7 +164,7 @@ function NewPlotForm({ onClose }: { onClose: () => void }) {
 
 export default function Plotagem() {
   const { currentProject, currentUser } = useApp()
-  const projectId = currentProject.id === 'proj-043' ? SEED_PROJECT_ID : currentProject.id
+  const projectId = currentProject.id
   const { plotOrders, usingMockData, createPlotOrder } = usePlotOrders(projectId)
   const { drawings } = useDrawings(projectId)
 

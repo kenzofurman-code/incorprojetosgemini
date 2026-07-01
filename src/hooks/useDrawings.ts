@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { listDrawings, uploadDrawing, type UploadDrawingParams } from '../lib/queries'
-import { MOCK_DRAWINGS, DISCIPLINE_MAP } from '../data/mockData'
+import { DISCIPLINE_MAP } from '../data/mockData'
 import type { Drawing } from '../types'
 
 const SUPABASE_CONFIGURED = !!(
@@ -18,8 +18,8 @@ export function useDrawings(projectId: string) {
     setError(null)
 
     if (!SUPABASE_CONFIGURED) {
-      // No credentials yet -> show mock data so the UI stays demonstrable
-      setDrawings(MOCK_DRAWINGS)
+      // Demo mode — show empty state, not fake data
+      setDrawings([])
       setUsingMockData(true)
       setLoading(false)
       return
@@ -30,24 +30,20 @@ export function useDrawings(projectId: string) {
       setDrawings(data)
       setUsingMockData(false)
     } catch (err) {
-      console.error('[useDrawings] Falha ao buscar do Supabase, usando dados de exemplo:', err)
-      setDrawings(MOCK_DRAWINGS)
-      setUsingMockData(true)
+      console.error('[useDrawings] Erro ao buscar pranchas:', err)
+      setDrawings([])
+      setUsingMockData(false)
       setError(err instanceof Error ? err.message : 'Erro ao carregar pranchas')
     } finally {
       setLoading(false)
     }
   }, [projectId])
 
-  useEffect(() => {
-    refresh()
-  }, [refresh])
+  useEffect(() => { refresh() }, [refresh])
 
   const upload = useCallback(async (params: UploadDrawingParams) => {
     if (!SUPABASE_CONFIGURED) {
-      throw new Error(
-        'Supabase não configurado. Preencha VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY no .env.local para habilitar upload real.'
-      )
+      throw new Error('Supabase não configurado. Preencha VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY no .env.local para habilitar upload real.')
     }
     const newDrawing = await uploadDrawing(params)
     const disc = DISCIPLINE_MAP[newDrawing.disciplineCode]

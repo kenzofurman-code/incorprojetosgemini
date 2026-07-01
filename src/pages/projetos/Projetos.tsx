@@ -7,7 +7,7 @@ import {
 import { Card, PageHeader, StatusBadge, Button, DataSourceBadge } from '../../components/ui'
 import { DISCIPLINES, DISCIPLINE_MAP } from '../../data/mockData'
 import { useDrawings } from '../../hooks/useDrawings'
-import { useApp, SEED_PROJECT_ID } from '../../context/AppContext'
+import { useApp } from '../../context/AppContext'
 import type { Drawing, ProjectPhase } from '../../types'
 
 function VersionPill({ revision, active }: { revision: string; active?: boolean }) {
@@ -392,7 +392,7 @@ function UploadPanel({ projectId, onClose, onUploaded }: {
 export default function Projetos() {
   const navigate = useNavigate()
   const { currentProject } = useApp()
-  const projectId = currentProject.id === 'proj-043' ? SEED_PROJECT_ID : currentProject.id
+  const projectId = currentProject.id
 
   const { drawings, loading, error, usingMockData, refresh } = useDrawings(projectId)
 
