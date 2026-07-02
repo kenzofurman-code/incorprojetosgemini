@@ -1,0 +1,85 @@
+name: Sync SharePoint
+
+on:
+  # Roda automaticamente 1x por dia às 9h horário de Brasília (UTC-3 = 12h UTC)
+  schedule:
+    - cron: '0 12 * * *'
+
+  # Permite disparar manualmente pela interface do GitHub (Actions → Run workflow)
+  workflow_dispatch:
+    inputs:
+      project_id:
+        description: 'UUID do projeto no Supabase (deixe em branco para usar o padrão do secret)'
+        required: false
+        default: ''
+      dry_run:
+        description: 'Dry run (true = apenas lista o que seria sincronizado, sem subir nada)'
+        type: boolean
+        default: false
+
+jobs:
+  sync:
+    name: Sincronizar pranchas aprovadas → SharePoint
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout do repositório
+        uses: actions/checkout@v4
+
+      - name: Configurar Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: scripts/sync-sharepoint/package-lock.json
+
+      - name: Instalar dependências do script de sincronização
+        working-directory: scripts/sync-sharepoint
+        run: npm ci
+
+      - name: Rodar sincronização
+        working-directory: scripts/sync-sharepoint
+        env:
+          # ─── Supabase ──────────────────────────────────────────────────
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+
+          # ─── Microsoft Graph / Azure AD ────────────────────────────────
+          MS_TENANT_ID: ${{ secrets.MS_TENANT_ID }}
+          MS_CLIENT_ID: ${{ secrets.MS_CLIENT_ID }}
+          MS_CLIENT_SECRET: ${{ secrets.MS_CLIENT_SECRET }}
+
+          # ─── Destino: SharePoint site ou OneDrive drive ─────────────────
+          # Configure pelo menos um dos dois no GitHub Secrets
+          MS_SITE_ID: ${{ secrets.MS_SITE_ID }}
+          MS_DRIVE_ID: ${{ secrets.MS_DRIVE_ID }}
+
+          # ─── Qual projeto sincronizar ───────────────────────────────────
+          # Se o disparo manual passar um project_id, usa ele; senão usa o secret
+          SYNC_PROJECT_ID: ${{ inputs.project_id || secrets.SYNC_PROJECT_ID }}
+
+          # ─── Configuração opcional ──────────────────────────────────────
+          SYNC_ROOT_FOLDER: ${{ secrets.SYNC_ROOT_FOLDER || 'IncorProjetos' }}
+          DRY_RUN: ${{ inputs.dry_run || 'false' }}
+
+        run: node sync.mjs
+
+      - name: Notificar falha por email (opcional)
+        if: failure()
+        uses: dawidd6/action-send-mail@v3
+        # Para usar este step, configure os secrets abaixo.
+        # Caso não queira notificação por email, apague este step inteiro.
+        with:
+          server_address: smtp.gmail.com
+          server_port: 587
+          username: ${{ secrets.NOTIFY_EMAIL_USER }}
+          password: ${{ secrets.NOTIFY_EMAIL_PASSWORD }}
+          subject: '[IncorProjetos] Falha na sincronização SharePoint'
+          to: ${{ secrets.NOTIFY_EMAIL_TO }}
+          from: IncorProjetos Sync <${{ secrets.NOTIFY_EMAIL_USER }}>
+          body: |
+            A sincronização diária de pranchas aprovadas para o SharePoint falhou.
+
+            Acesse os logs em:
+            https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}

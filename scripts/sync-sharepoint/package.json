@@ -1,0 +1,19 @@
+{
+  "name": "sync-sharepoint",
+  "version": "1.0.0",
+  "description": "Sincroniza diariamente as ultimas versoes aprovadas do IncorProjetos (Supabase) para o SharePoint/OneDrive via Microsoft Graph API",
+  "type": "module",
+  "main": "sync.mjs",
+  "scripts": {
+    "setup": "node setup.mjs",
+    "sync": "node sync.mjs",
+    "sync:dry": "DRY_RUN=true node sync.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@azure/msal-node": "^5.3.0",
+    "@supabase/supabase-js": "^2.45.0"
+  }
+}

@@ -12,6 +12,8 @@ import Revisao from './pages/review/Revisao'
 import Obra from './pages/obra/Obra'
 import Versoes from './pages/obra/Versoes'
 import Plotagem from './pages/plotagem/Plotagem'
+import BIMPage from './pages/bim/BIMPage'
+import CADPage from './pages/cad/CADPage'
 
 // ─── Auth Guard ───────────────────────────────────────────────────────────────
 // Redirects unauthenticated users to /login.
@@ -83,6 +85,8 @@ export default function App() {
             <Route path="projetos/:id/sobrepor"        element={<Sobrepor />} />
             <Route path="projetos/:id/revisao"         element={<Revisao />} />
             <Route path="revisao"                      element={<Revisao />} />
+            <Route path="bim"                          element={<BIMPage />} />
+            <Route path="cad"                          element={<CADPage />} />
             <Route path="obra"                         element={<Obra />} />
             <Route path="versoes"                      element={<Versoes />} />
             <Route path="plotagem"                     element={<Plotagem />} />
