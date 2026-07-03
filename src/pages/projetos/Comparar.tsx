@@ -1,10 +1,31 @@
-import { useState, useRef, useCallback } from 'react'
+import { useState, useRef, useCallback, useEffect, useMemo } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { ArrowLeft, ChevronLeft, ChevronRight, GitCompare, Info } from 'lucide-react'
-import { Card, Button, PdfViewer } from '../../components/ui'
+import { ArrowLeft, ChevronLeft, ChevronRight, GitCompare, Info, Loader2 } from 'lucide-react'
+import { Card, Button } from '../../components/ui'
 import { useDrawings } from '../../hooks/useDrawings'
 import { useApp } from '../../context/AppContext'
 import { MOCK_DRAWINGS } from '../../data/mockData'
+import { renderPdfPage, createDifferenceCanvas, type RenderedPdfPage } from '../../lib/pdf-comparison'
+
+interface CanvasViewProps {
+  source: HTMLCanvasElement | null
+  className?: string
+  style?: React.CSSProperties
+}
+
+function CanvasView({ source, className = '', style }: CanvasViewProps) {
+  const ref = useRef<HTMLCanvasElement>(null)
+  useEffect(() => {
+    const canvas = ref.current
+    if (!canvas || !source) return
+    canvas.width = source.width
+    canvas.height = source.height
+    canvas.getContext('2d')?.drawImage(source, 0, 0)
+  }, [source])
+
+  if (!source) return null
+  return <canvas className={`block ${className}`} ref={ref} style={style} />
+}
 
 export default function Comparar() {
   const { id } = useParams()
@@ -34,9 +55,9 @@ export default function Comparar() {
     const rect = containerRef.current.getBoundingClientRect()
     const pct = ((e.clientX - rect.left) / rect.width) * 100
     if (dragging === 'left') {
-      setSliderPos(Math.max(15, Math.min(pct, sliderPos2 - 10)))
+      setSliderPos(Math.max(10, Math.min(pct, sliderPos2 - 10)))
     } else {
-      setSliderPos2(Math.max(sliderPos + 10, Math.min(pct, 85)))
+      setSliderPos2(Math.max(sliderPos + 10, Math.min(pct, 90)))
     }
   }, [dragging, sliderPos, sliderPos2])
 
@@ -47,6 +68,51 @@ export default function Comparar() {
   const rightVersion = versions.find(v => v.revision === revRight)
   const leftUrl  = leftVersion?.pdfUrl  || drawing.pdfUrl || null
   const rightUrl = rightVersion?.pdfUrl || drawing.pdfUrl || null
+
+  // PDF rendering state
+  const [leftPage, setLeftPage] = useState<RenderedPdfPage | null>(null)
+  const [rightPage, setRightPage] = useState<RenderedPdfPage | null>(null)
+  const [rendering, setRendering] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!leftUrl || !rightUrl) return
+    let cancelled = false
+    setRendering(true)
+    setError(null)
+
+    Promise.all([
+      renderPdfPage(leftUrl, page, false),
+      renderPdfPage(rightUrl, page, false)
+    ])
+      .then(([left, right]) => {
+        if (!cancelled) {
+          setLeftPage(left)
+          setRightPage(right)
+        }
+      })
+      .catch(err => {
+        if (!cancelled) {
+          console.error('[Comparar] Error rendering PDFs:', err)
+          setError(err instanceof Error ? err.message : 'Erro ao renderizar PDFs de comparação.')
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setRendering(false)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [leftUrl, rightUrl, page])
+
+  // Generate difference canvas dynamically
+  const diffCanvas = useMemo(() => {
+    if (!leftPage || !rightPage) return null
+    return createDifferenceCanvas(leftPage.canvas, rightPage.canvas, 25)
+  }, [leftPage, rightPage])
+
+  const pageCount = Math.min(leftPage?.pageCount ?? 1, rightPage?.pageCount ?? 1)
 
   return (
     <div className="space-y-4 h-full flex flex-col">
@@ -77,14 +143,16 @@ export default function Comparar() {
               onClick={() => setPage(p => Math.max(1, p - 1))}
               className="p-1 rounded hover:bg-white/10 transition-colors"
               style={{ color: 'var(--slate)' }}
+              disabled={page <= 1 || rendering}
             >
               <ChevronLeft size={14} />
             </button>
-            <span style={{ color: 'var(--white)' }}>Pág. {page}</span>
+            <span style={{ color: 'var(--white)' }}>Pág. {page} / {pageCount}</span>
             <button
-              onClick={() => setPage(p => p + 1)}
+              onClick={() => setPage(p => Math.min(pageCount, p + 1))}
               className="p-1 rounded hover:bg-white/10 transition-colors"
               style={{ color: 'var(--slate)' }}
+              disabled={page >= pageCount || rendering}
             >
               <ChevronRight size={14} />
             </button>
@@ -118,7 +186,7 @@ export default function Comparar() {
             Centro – Diferenças destacadas
           </div>
           <div className="text-xs font-mono font-bold" style={{ color: 'var(--orange)' }}>
-            AUTO
+            PIXEL DIFF (Vermelho = Alteração)
           </div>
         </Card>
         <Card className="p-3">
@@ -166,111 +234,98 @@ export default function Comparar() {
         </Card>
       )}
 
-      {/* Three-panel comparison viewer */}
-      <div
-        ref={containerRef}
-        className="flex-1 relative rounded-xl overflow-hidden select-none"
-        style={{ minHeight: '400px', background: '#0d1825', border: '1px solid var(--surface-border)' }}
-        onMouseMove={handleMouseMove}
-        onMouseUp={stopDrag}
-        onMouseLeave={stopDrag}
-      >
-        {/* Left panel — older revision */}
-        <div className="absolute inset-y-0 left-0 overflow-hidden" style={{ width: `${sliderPos}%` }}>
-          <PdfViewer
-            url={leftUrl}
-            page={page}
-            tint="#3B82F6"
-            label={`VERSÃO ${revLeft}`}
-            className="w-full h-full"
-            style={{ height: '100%' }}
-          />
+      {/* Error display */}
+      {error && (
+        <div className="p-4 rounded-xl text-sm" style={{ background: '#EF444422', color: '#EF4444', border: '1px solid #EF444444' }}>
+          {error}
         </div>
+      )}
 
-        {/* Left divider */}
-        <div
-          className="absolute inset-y-0 compare-slider flex items-center justify-center z-20"
-          style={{ left: `${sliderPos}%`, width: '3px', background: '#3B82F6', cursor: 'ew-resize' }}
-          onMouseDown={() => setDragging('left')}
-        >
-          <div className="absolute flex items-center justify-center w-7 h-7 rounded-full shadow-lg"
-            style={{ background: '#3B82F6' }}>
-            <div className="flex gap-0.5">
-              <ChevronLeft size={10} color="white" />
-              <ChevronRight size={10} color="white" />
-            </div>
+      {/* Three-panel comparison viewer with unified stacked scroll */}
+      <div className="flex-1 min-h-[450px] relative rounded-xl border overflow-auto bg-white" style={{ borderColor: 'var(--surface-border)' }}>
+        {rendering && (
+          <div className="absolute inset-0 bg-[#0d1825]/40 backdrop-blur-xs flex items-center justify-center z-30">
+            <Loader2 className="animate-spin text-orange-500" size={32} />
           </div>
-        </div>
+        )}
 
-        {/* Center panel — diff overlay */}
-        <div
-          className="absolute inset-y-0 overflow-hidden"
-          style={{ left: `${sliderPos}%`, width: `${sliderPos2 - sliderPos}%` }}
-        >
-          {/* Show right PDF with blue-orange mix filter hint */}
-          <PdfViewer
-            url={rightUrl}
-            page={page}
-            tint="#F97316"
-            label={`${revLeft} → ${revRight}`}
-            opacity={70}
-            className="w-full h-full"
-            style={{ height: '100%' }}
-          />
+        {leftPage && rightPage && (
           <div
-            className="absolute inset-0 pointer-events-none"
-            style={{ background: 'rgba(249,115,22,0.08)', mixBlendMode: 'multiply' }}
-          />
-          <div className="absolute top-8 left-0 right-0 flex items-center justify-center pointer-events-none">
-            <div className="text-xs px-2 py-1 rounded font-semibold"
-              style={{ background: 'rgba(249,115,22,0.9)', color: 'white' }}>
-              HIGHLIGHT DE DIFERENÇAS
+            ref={containerRef}
+            className="relative select-none mx-auto"
+            style={{
+              width: `${leftPage.canvas.width}px`,
+              height: `${leftPage.canvas.height}px`,
+              maxWidth: '100%'
+            }}
+            onMouseMove={handleMouseMove}
+            onMouseUp={stopDrag}
+            onMouseLeave={stopDrag}
+          >
+            {/* Panel 1 (Bottom): older revision */}
+            <div className="absolute inset-0 z-0">
+              <CanvasView source={leftPage.canvas} className="w-full h-full" />
+            </div>
+
+            {/* Panel 2 (Middle): difference canvas (clipped between sliders) */}
+            <div
+              className="absolute inset-0 z-10 overflow-hidden"
+              style={{ clipPath: `inset(0 ${100 - sliderPos2}% 0 ${sliderPos}%)` }}
+            >
+              <CanvasView source={diffCanvas} className="w-full h-full" />
+            </div>
+
+            {/* Panel 3 (Top): latest revision (clipped to right of slider 2) */}
+            <div
+              className="absolute inset-0 z-10 overflow-hidden"
+              style={{ clipPath: `inset(0 0 0 ${sliderPos2}%)` }}
+            >
+              <CanvasView source={rightPage.canvas} className="w-full h-full" />
+            </div>
+
+            {/* Left Slider controller */}
+            <div
+              className="absolute inset-y-0 z-20 flex items-center justify-center cursor-ew-resize"
+              style={{ left: `${sliderPos}%`, width: '4px', background: '#3B82F6' }}
+              onMouseDown={() => setDragging('left')}
+            >
+              <div className="absolute w-6 h-6 rounded-full flex items-center justify-center shadow-md" style={{ background: '#3B82F6', color: 'white' }}>
+                <ChevronLeft size={14} className="-mr-1" />
+                <ChevronRight size={14} />
+              </div>
+            </div>
+
+            {/* Right Slider controller */}
+            <div
+              className="absolute inset-y-0 z-20 flex items-center justify-center cursor-ew-resize"
+              style={{ left: `${sliderPos2}%`, width: '4px', background: '#22C55E' }}
+              onMouseDown={() => setDragging('right')}
+            >
+              <div className="absolute w-6 h-6 rounded-full flex items-center justify-center shadow-md" style={{ background: '#22C55E', color: 'white' }}>
+                <ChevronLeft size={14} className="-mr-1" />
+                <ChevronRight size={14} />
+              </div>
             </div>
           </div>
-        </div>
+        )}
 
-        {/* Right divider */}
-        <div
-          className="absolute inset-y-0 compare-slider flex items-center justify-center z-20"
-          style={{ left: `${sliderPos2}%`, width: '3px', background: '#22C55E', cursor: 'ew-resize' }}
-          onMouseDown={() => setDragging('right')}
-        >
-          <div className="absolute flex items-center justify-center w-7 h-7 rounded-full shadow-lg"
-            style={{ background: '#22C55E' }}>
-            <div className="flex gap-0.5">
-              <ChevronLeft size={10} color="white" />
-              <ChevronRight size={10} color="white" />
+        {/* Labels overlay at top of viewer */}
+        {leftPage && rightPage && (
+          <div className="sticky top-0 left-0 right-0 flex z-20 pointer-events-none select-none">
+            <div className="text-xs font-semibold px-3 py-1 flex items-center justify-center"
+              style={{ width: `${sliderPos}%`, background: 'rgba(59,130,246,0.85)', color: 'white' }}>
+              Versão {revLeft}
+            </div>
+            <div className="text-xs font-semibold px-3 py-1 flex items-center justify-center"
+              style={{ width: `${sliderPos2 - sliderPos}%`, background: 'rgba(249,115,22,0.85)', color: 'white' }}>
+              Diferenças destacadas (Pixel Diff)
+            </div>
+            <div className="text-xs font-semibold px-3 py-1 flex-1 flex items-center justify-center"
+              style={{ background: 'rgba(34,197,94,0.85)', color: 'white' }}>
+              Versão {revRight}
             </div>
           </div>
-        </div>
-
-        {/* Right panel — latest revision */}
-        <div className="absolute inset-y-0 right-0 overflow-hidden" style={{ left: `${sliderPos2}%`, right: 0 }}>
-          <PdfViewer
-            url={rightUrl}
-            page={page}
-            tint="#22C55E"
-            label={`VERSÃO ${revRight}`}
-            className="w-full h-full"
-            style={{ height: '100%' }}
-          />
-        </div>
-
-        {/* Panel labels at top */}
-        <div className="absolute top-0 left-0 right-0 flex pointer-events-none z-10">
-          <div className="text-xs font-semibold px-3 py-1"
-            style={{ width: `${sliderPos}%`, background: 'rgba(59,130,246,0.8)', color: 'white', textAlign: 'center' }}>
-            {revLeft}
-          </div>
-          <div className="text-xs font-semibold px-3 py-1"
-            style={{ width: `${sliderPos2 - sliderPos}%`, background: 'rgba(249,115,22,0.8)', color: 'white', textAlign: 'center' }}>
-            DIFF
-          </div>
-          <div className="text-xs font-semibold px-3 py-1 flex-1"
-            style={{ background: 'rgba(34,197,94,0.8)', color: 'white', textAlign: 'center' }}>
-            {revRight}
-          </div>
-        </div>
+        )}
       </div>
 
       {/* Actions */}
@@ -281,7 +336,7 @@ export default function Comparar() {
         <Button variant="ghost" size="sm" onClick={() => navigate(`/projetos/${id}/sobrepor`)}>
           Ir para Sobreposição
         </Button>
-        <Button size="sm" className="ml-auto">
+        <Button size="sm" className="ml-auto" onClick={() => window.print()}>
           Exportar Comparação
         </Button>
       </div>

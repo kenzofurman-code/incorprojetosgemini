@@ -1,12 +1,13 @@
-import { useState } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { ArrowLeft, Layers, Plus, Eye, EyeOff, Move, Palette } from 'lucide-react'
-import { Card, Button, PdfViewer } from '../../components/ui'
+import { ArrowLeft, Layers, Plus, Eye, EyeOff, Move, Palette, Loader2 } from 'lucide-react'
+import { Card, Button } from '../../components/ui'
 import { useDrawings } from '../../hooks/useDrawings'
 import { useApp } from '../../context/AppContext'
 import { MOCK_DRAWINGS } from '../../data/mockData'
+import { renderPdfPage, tintDrawing, type RenderedPdfPage } from '../../lib/pdf-comparison'
 
-const OVERLAY_COLORS = ['#EF4444','#22C55E','#F97316','#3B82F6','#EAB308','#8B5CF6','#06B6D4','#000000']
+const OVERLAY_COLORS = ['#EF4444', '#22C55E', '#3B82F6', '#F97316', '#EAB308', '#8B5CF6', '#06B6D4', '#000000']
 
 interface LayerDoc {
   id: string
@@ -27,8 +28,6 @@ export default function Sobrepor() {
   const { drawings } = useDrawings(projectId)
 
   const baseDrawing = (id ? drawings.find(d => d.id === id) : null) || MOCK_DRAWINGS[0]
-
-  // Pick a second drawing for the initial overlay (different discipline)
   const secondDrawing = drawings.find(d => d.id !== baseDrawing.id) || MOCK_DRAWINGS[4]
 
   const [layers, setLayers] = useState<LayerDoc[]>([
@@ -47,7 +46,7 @@ export default function Sobrepor() {
       code: secondDrawing.code,
       discipline: secondDrawing.discipline,
       color: '#EF4444',
-      opacity: 56,
+      opacity: 70,
       visible: true,
       isBase: false,
       pdfUrl: secondDrawing.pdfUrl || null,
@@ -69,7 +68,7 @@ export default function Sobrepor() {
       code: unused.code,
       discipline: unused.discipline,
       color: OVERLAY_COLORS[prev.length % OVERLAY_COLORS.length],
-      opacity: 60,
+      opacity: 70,
       visible: true,
       isBase: false,
       pdfUrl: unused.pdfUrl || null,
@@ -77,6 +76,67 @@ export default function Sobrepor() {
   }
 
   const visibleLayers = layers.filter(l => l.visible)
+
+  // ─── PDF Render & Tint Pipeline ─────────────────────────────────────────────
+  const [renderedPages, setRenderedPages] = useState<Record<string, RenderedPdfPage>>({})
+  const [rendering, setRendering] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    const activeLayers = visibleLayers.filter(l => l.pdfUrl)
+    if (activeLayers.length === 0) return
+
+    setRendering(true)
+    setError(null)
+
+    // Render all visible PDFs concurrently
+    Promise.all(
+      activeLayers.map(l =>
+        renderPdfPage(l.pdfUrl!, page, removeText)
+          .then(rendered => ({ id: l.id, rendered }))
+      )
+    )
+      .then(results => {
+        if (cancelled) return
+        const newPages: Record<string, RenderedPdfPage> = {}
+        for (const item of results) {
+          newPages[item.id] = item.rendered
+        }
+        setRenderedPages(newPages)
+      })
+      .catch(err => {
+        if (!cancelled) {
+          console.error('[Sobrepor] Error rendering overlay:', err)
+          setError(err instanceof Error ? err.message : 'Erro ao renderizar sobreposição de PDFs.')
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setRendering(false)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [visibleLayers.length, page, removeText, layers]) // layers dependency allows picking different files
+
+  // Apply tint Drawing to rendered canvas outputs
+  const tintedCanvases = useMemo(() => {
+    const tinted: Record<string, HTMLCanvasElement> = {}
+    for (const layer of visibleLayers) {
+      const rendered = renderedPages[layer.id]
+      if (rendered) {
+        tinted[layer.id] = tintDrawing(rendered.canvas, layer.color)
+      }
+    }
+    return tinted
+  }, [renderedPages, visibleLayers])
+
+  // Get largest page width & height for aspect ratio preservation
+  const firstRendered = Object.values(renderedPages)[0]?.canvas
+  const dimensions = firstRendered
+    ? { width: firstRendered.width, height: firstRendered.height }
+    : { width: 800, height: 600 }
 
   return (
     <div className="h-full flex flex-col space-y-4">
@@ -104,40 +164,38 @@ export default function Sobrepor() {
 
       <div className="flex-1 flex gap-4 min-h-0">
         {/* Left panel – layer controls */}
-        <div className="w-72 flex-shrink-0 space-y-3 overflow-y-auto">
+        <div className="w-72 flex-shrink-0 space-y-3 overflow-y-auto pr-1">
           {/* Options */}
           <Card className="p-3">
             <div className="text-xs font-semibold mb-2" style={{ color: 'var(--white)' }}>Opções</div>
 
             {/* Page selector */}
-            <div className="flex items-center gap-2 mb-2">
+            <div className="flex items-center gap-2 mb-3">
               <span className="text-xs" style={{ color: 'var(--slate)' }}>Página</span>
               <button
                 onClick={() => setPage(p => Math.max(1, p - 1))}
                 className="w-6 h-6 rounded flex items-center justify-center hover:bg-white/10 transition-colors text-xs"
                 style={{ color: 'var(--slate)' }}
+                disabled={page <= 1 || rendering}
               >‹</button>
               <span className="text-xs font-mono" style={{ color: 'var(--white)' }}>{page}</span>
               <button
                 onClick={() => setPage(p => p + 1)}
                 className="w-6 h-6 rounded flex items-center justify-center hover:bg-white/10 transition-colors text-xs"
                 style={{ color: 'var(--slate)' }}
+                disabled={rendering}
               >›</button>
             </div>
 
-            <label className="flex items-center gap-2 cursor-pointer">
-              <div
-                className="w-8 h-4 rounded-full relative transition-all cursor-pointer"
-                style={{ background: removeText ? 'var(--orange)' : 'var(--surface-border)' }}
-                onClick={() => setRemoveText(!removeText)}
-              >
-                <div
-                  className="absolute top-0.5 w-3 h-3 rounded-full transition-all"
-                  style={{ background: 'white', left: removeText ? '17px' : '2px' }}
-                />
-              </div>
+            <label className="flex items-center gap-2 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={removeText}
+                onChange={e => setRemoveText(e.target.checked)}
+                className="w-4 h-4 rounded cursor-pointer accent-orange-500"
+              />
               <span className="text-xs" style={{ color: 'var(--slate)' }}>
-                Remover textos do PDF
+                Remover textos do PDF (Experimental)
               </span>
             </label>
           </Card>
@@ -160,7 +218,6 @@ export default function Sobrepor() {
                           BASE
                         </span>
                       )}
-                      {/* PDF status dot */}
                       <span
                         className="ml-1.5 inline-block w-1.5 h-1.5 rounded-full"
                         style={{ background: layer.pdfUrl ? '#22C55E' : '#EAB308' }}
@@ -178,7 +235,6 @@ export default function Sobrepor() {
 
                 {/* Color picker */}
                 <div className="flex items-center gap-2">
-                  <Palette size={12} style={{ color: 'var(--slate)' }} />
                   <span className="text-xs" style={{ color: 'var(--slate)' }}>Cor</span>
                   <div className="flex gap-1 ml-auto">
                     {OVERLAY_COLORS.map(c => (
@@ -212,10 +268,6 @@ export default function Sobrepor() {
                     style={{ accentColor: layer.color }}
                   />
                 </div>
-
-                <button className="flex items-center gap-1.5 text-xs" style={{ color: 'var(--slate)' }}>
-                  <Move size={12} /> Ajustar posição
-                </button>
               </Card>
             ))}
           </div>
@@ -225,31 +277,58 @@ export default function Sobrepor() {
           </Button>
         </div>
 
-        {/* Right panel – stacked PDFs */}
-        <div className="flex-1 rounded-xl overflow-hidden relative" style={{ background: '#f8f5f0', minHeight: '400px' }}>
+        {/* Right panel – stacked canvases */}
+        <div className="flex-1 rounded-xl overflow-auto bg-white border relative p-4 flex items-center justify-center" style={{ borderColor: 'var(--surface-border)' }}>
+          {rendering && (
+            <div className="absolute inset-0 bg-[#0d1825]/40 backdrop-blur-xs flex items-center justify-center z-30">
+              <Loader2 className="animate-spin text-orange-500" size={32} />
+            </div>
+          )}
+
+          {error && (
+            <div className="absolute inset-x-4 top-4 p-4 rounded-xl text-sm z-20" style={{ background: '#EF444422', color: '#EF4444', border: '1px solid #EF444444' }}>
+              {error}
+            </div>
+          )}
+
           {visibleLayers.length === 0 ? (
-            <div className="absolute inset-0 flex items-center justify-center"
-              style={{ color: 'var(--slate)' }}>
-              <span className="text-sm">Nenhuma camada visível</span>
+            <div className="text-sm" style={{ color: 'var(--slate)' }}>
+              Nenhuma camada visível
             </div>
           ) : (
-            // Stack PDFs using CSS mix-blend-mode multiply
-            visibleLayers.map((layer, i) => (
-              <div
-                key={layer.id}
-                className="absolute inset-0"
-                style={{ mixBlendMode: i === 0 ? 'normal' : 'multiply' }}
-              >
-                <PdfViewer
-                  url={layer.pdfUrl}
-                  page={page}
-                  tint={layer.color}
-                  opacity={layer.opacity}
-                  className="w-full h-full"
-                  style={{ height: '100%', background: i === 0 ? '#f8f5f0' : 'transparent' }}
-                />
-              </div>
-            ))
+            <div
+              className="relative shadow-lg"
+              style={{
+                width: `${dimensions.width}px`,
+                height: `${dimensions.height}px`,
+                maxWidth: '100%',
+                aspectRatio: `${dimensions.width}/${dimensions.height}`
+              }}
+            >
+              {/* Stacked Tinted Canvases */}
+              {visibleLayers.map(layer => {
+                const canvas = tintedCanvases[layer.id]
+                if (!canvas) return null
+                return (
+                  <div
+                    key={layer.id}
+                    className="absolute inset-0 transition-opacity duration-150"
+                    style={{ opacity: layer.opacity / 100 }}
+                  >
+                    {/* Render raw canvas directly in DOM */}
+                    <canvas
+                      ref={el => {
+                        if (!el) return
+                        el.width = canvas.width
+                        el.height = canvas.height
+                        el.getContext('2d')?.drawImage(canvas, 0, 0)
+                      }}
+                      className="w-full h-full block"
+                    />
+                  </div>
+                )
+              })}
+            </div>
           )}
 
           {/* Remove text mode hint */}
