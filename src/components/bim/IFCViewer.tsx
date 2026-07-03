@@ -398,14 +398,16 @@ export default function IFCViewer({ onIssueCreated, modelLabel, className = '', 
         world.scene.three.add(dirLight)
 
         // ── OBRIGATÓRIO: Inicializar os Fragmentos PRIMEIRO ──
-        components.get(OBC.FragmentsManager)
+        const fragments = components.get(OBC.FragmentsManager)
+        const workerUrl = await OBC.FragmentsManager.getWorker()
+        fragments.init(workerUrl)
 
         // ── Inicializar o Carregador IFC APÓS os fragmentos ──
         const ifcLoader = components.get(OBC.IfcLoader)
         await ifcLoader.setup({
           autoSetWasm: false,
           wasm: {
-            path: "/",
+            path: "/wasm/web-ifc/",
             absolute: false,
           },
         })
