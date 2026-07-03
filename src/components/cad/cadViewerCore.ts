@@ -221,12 +221,19 @@ export async function initCADViewer(opts: CADViewerInitOptions): Promise<CADView
       doc.database.events.openProgress.addEventListener(handleProgress)
     }
 
+    const noopFontLoader = {
+      getAvaiableFonts: async () => [],
+      load: async () => {},
+    }
+
     try {
       // Pass a safe ASCII virtual name to bypass Emscripten/LibreDWG WASM filesystem 
       // crashes on accented or special unicode characters (like Á, É, Ç)
+      // Pass noopFontLoader to prevent falling back to the broken default font loader CDN
       const success = await manager.openDocument(virtualFileName, buffer, {
         mode: AcEdOpenMode.Read,
         progressiveRendering: true,
+        fontLoader: noopFontLoader as any,
       })
 
       if (!success && lastError) {
