@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
   ArrowLeft, FileCheck, Plus, MessageSquare,
-  CheckCircle, XCircle, AlertTriangle
+  CheckCircle, XCircle, AlertTriangle, Layers, Loader2
 } from 'lucide-react'
 import { Card, Button, IssueCategoryBadge, StatusBadge, DataSourceBadge, DrawingQrCode } from '../../components/ui'
 import { MOCK_DRAWINGS } from '../../data/mockData'
@@ -59,13 +59,11 @@ export default function Revisao() {
   const { id } = useParams()
   const navigate = useNavigate()
   const { currentUser, currentProject } = useApp()
-  const projectId = currentProject.id
+  const projectId = currentProject.id  // Load drawings to find the one being reviewed
+  const { drawings, loading: drawingsLoading } = useDrawings(projectId)
+  const drawing = id ? drawings.find(d => d.id === id) : null
 
-  // Load drawings to find the one being reviewed
-  const { drawings } = useDrawings(projectId)
-  const drawing = (id ? drawings.find(d => d.id === id) : null) || MOCK_DRAWINGS[2]
-
-  // Load reviews + issues for this drawing
+  // Load reviews + issues for this drawing (only call if we have a real drawing)
   const { issues, usingMockData, createIssue, submitDecision } = useReviews(drawing?.id)
 
   const [selectedIssue, setSelectedIssue] = useState<string | null>(null)
@@ -91,7 +89,7 @@ export default function Revisao() {
   }
 
   async function saveIssue() {
-    if (!pendingPos || !newIssue.title) return
+    if (!pendingPos || !newIssue.title || !drawing) return
     await createIssue({
       drawingId: drawing.id,
       x: pendingPos.x,
@@ -124,7 +122,6 @@ export default function Revisao() {
       setShowDecisionPanel(false)
       setDecision(null)
       setNotes('')
-      // Go back to projects lists after reviewing
       navigate('/projetos')
     } catch (err) {
       console.error('[Revisao] Error confirming decision:', err)
@@ -137,21 +134,86 @@ export default function Revisao() {
   const selectedIssueData = issues.find(i => i.id === selectedIssue)
   const [showQrCode, setShowQrCode] = useState(false)
 
+  // ─── Render Selector Panel if accessed directly without id ──────────────────
+  if (!id) {
+    const pendingDrawings = drawings.filter(d => d.status === 'em_analise')
+
+    return (
+      <div className="space-y-5 h-full flex flex-col">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-orange-500/10 flex items-center justify-center text-orange-500">
+            <Layers size={20} />
+          </div>
+          <div>
+            <h2 className="text-xl font-bold text-white">Central de Revisões</h2>
+            <p className="text-xs text-slate-400">
+              Selecione uma prancha em análise do projeto <span className="text-white font-semibold">{currentProject.name}</span> para iniciar a revisão
+            </p>
+          </div>
+        </div>
+
+        {drawingsLoading ? (
+          <Card className="flex-1 flex items-center justify-center p-8">
+            <Loader2 className="animate-spin text-orange-500" size={32} />
+          </Card>
+        ) : pendingDrawings.length === 0 ? (
+          <Card className="flex-1 flex flex-col items-center justify-center p-12 text-center border-dashed">
+            <div className="w-16 h-16 rounded-full bg-white/5 flex items-center justify-center text-slate-500 mb-4">
+              <FileCheck size={32} />
+            </div>
+            <h3 className="text-base font-bold text-white mb-1">Nenhuma prancha pendente de revisão</h3>
+            <p className="text-xs text-slate-400 max-w-sm mb-4">
+              Todas as pranchas deste projeto estão aprovadas ou revisadas. Suba uma nova prancha ou nova revisão na aba "Projetos" para iniciar.
+            </p>
+            <Button size="sm" onClick={() => navigate('/projetos')}>
+              Ir para Projetos
+            </Button>
+          </Card>
+        ) : (
+          <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
+            {pendingDrawings.map(d => (
+              <Card
+                key={d.id}
+                className="p-4 hover:border-orange-500/50 cursor-pointer transition-all flex flex-col gap-3 group relative overflow-hidden"
+                onClick={() => navigate(`/projetos/${d.id}/revisao`)}
+                style={{ border: '1px solid var(--surface-border)' }}
+              >
+                <div className="absolute top-0 right-0 w-24 h-24 bg-orange-500/5 rounded-full -mr-8 -mt-8 transition-transform group-hover:scale-110" />
+                <div>
+                  <span className="text-[10px] font-mono px-1.5 py-0.5 rounded font-bold"
+                    style={{ background: 'var(--surface-mid)', color: 'var(--orange)' }}>
+                    {d.disciplineCode}
+                  </span>
+                  <h4 className="text-sm font-bold text-white mt-2 truncate font-mono">{d.code}</h4>
+                  <p className="text-xs text-slate-400 truncate mt-0.5">{d.title}</p>
+                </div>
+                <div className="flex items-center justify-between pt-2 border-t border-slate-700/50 text-[10px] text-slate-500 mt-auto">
+                  <span>Pavimento: <span className="text-slate-300 font-semibold">{d.floor}</span></span>
+                  <span>Rev: <span className="text-white font-bold">{d.revision}</span></span>
+                </div>
+              </Card>
+            ))}
+          </div>
+        )}
+      </div>
+    )
+  }
+
   return (
     <div className="h-full flex flex-col space-y-4">
       <DataSourceBadge usingMockData={usingMockData} />
       {/* Header */}
       <div className="flex items-center gap-3 flex-shrink-0">
-        <button onClick={() => navigate('/projetos')} className="p-1.5 rounded-lg hover:bg-white/10 transition-colors" style={{ color: 'var(--slate)' }}>
+        <button onClick={() => navigate('/revisao')} className="p-1.5 rounded-lg hover:bg-white/10 transition-colors" style={{ color: 'var(--slate)' }}>
           <ArrowLeft size={18} />
         </button>
         <div className="flex-1">
           <div className="flex items-center gap-2">
             <FileCheck size={16} style={{ color: 'var(--orange)' }} />
             <span className="text-sm font-semibold" style={{ color: 'var(--white)' }}>Revisão & Aprovação</span>
-            <StatusBadge status={drawing.status} />
+            {drawing && <StatusBadge status={drawing.status} />}
           </div>
-          <div className="text-xs font-mono mt-0.5" style={{ color: 'var(--slate)' }}>{drawing.code}</div>
+          <div className="text-xs font-mono mt-0.5" style={{ color: 'var(--slate)' }}>{drawing?.code}</div>
         </div>
         <div className="flex items-center gap-2">
           <Button
@@ -162,17 +224,21 @@ export default function Revisao() {
             <Plus size={14} />
             {addingIssue ? 'Clique na prancha' : 'Adicionar Issue'}
           </Button>
-          <Button variant="ghost" size="sm" onClick={() => setShowQrCode(!showQrCode)}>
-            QR Code
-          </Button>
-          <Button size="sm" onClick={() => setShowDecisionPanel(!showDecisionPanel)}>
-            <FileCheck size={14} /> Aprovar / Rejeitar
-          </Button>
+          {drawing && (
+            <>
+              <Button variant="ghost" size="sm" onClick={() => setShowQrCode(!showQrCode)}>
+                QR Code
+              </Button>
+              <Button size="sm" onClick={() => setShowDecisionPanel(!showDecisionPanel)}>
+                <FileCheck size={14} /> Aprovar / Rejeitar
+              </Button>
+            </>
+          )}
         </div>
       </div>
 
       {/* QR Code panel */}
-      {showQrCode && (
+      {showQrCode && drawing && (
         <Card className="p-4 flex-shrink-0 flex items-center justify-center gap-6"
           style={{ border: '1px solid rgba(249,115,22,0.3)' }}>
           <DrawingQrCode
@@ -192,7 +258,7 @@ export default function Revisao() {
       )}
 
       {/* Decision panel */}
-      {showDecisionPanel && (
+      {showDecisionPanel && drawing && (
         <Card className="p-4 flex-shrink-0" style={{ border: '1px solid rgba(249,115,22,0.3)' }}>
           <div className="text-sm font-semibold mb-3" style={{ color: 'var(--white)' }}>
             Decisão de Revisão — {drawing.revision}
@@ -276,8 +342,8 @@ export default function Revisao() {
               <text x="310" y="90" textAnchor="middle" fill="#555" fontSize="11" fontWeight="500">VARANDA</text>
               <text x="265" y="228" textAnchor="middle" fill="#555" fontSize="11" fontWeight="500">QUARTO 02</text>
               <rect x="30" y="260" width="340" height="30" fill="none" stroke="#333" strokeWidth="0.5" />
-              <text x="40" y="278" fill="#333" fontSize="7">{drawing.title}</text>
-              <text x="350" y="278" textAnchor="end" fill="#333" fontSize="8" fontWeight="bold">{drawing.revision}</text>
+              <text x="40" y="278" fill="#333" fontSize="7">{drawing?.title}</text>
+              <text x="350" y="278" textAnchor="end" fill="#333" fontSize="8" fontWeight="bold">{drawing?.revision}</text>
             </svg>
 
             {/* Issue pins */}
