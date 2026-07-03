@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { ArrowLeft, Layers, Plus, Eye, EyeOff, Move, Palette, Loader2 } from 'lucide-react'
+import { ArrowLeft, Layers, Plus, Eye, EyeOff, Move, Palette, Loader2, ArrowUp, ArrowDown, Check, X, RotateCcw } from 'lucide-react'
 import { Card, Button } from '../../components/ui'
 import { useDrawings } from '../../hooks/useDrawings'
 import { useApp } from '../../context/AppContext'
@@ -18,6 +18,25 @@ interface LayerDoc {
   visible: boolean
   isBase: boolean
   pdfUrl?: string | null
+  // 2-point reference alignment transform
+  alignmentTransform?: {
+    scale: number
+    angle: number
+    base1: { x: number; y: number }
+    base2: { x: number; y: number }
+    layer1: { x: number; y: number }
+    layer2: { x: number; y: number }
+  } | null
+}
+
+interface AlignState {
+  active: boolean
+  layerId: string | null
+  step: 'base1' | 'base2' | 'layer1' | 'layer2' | 'done'
+  base1?: { x: number; y: number }
+  base2?: { x: number; y: number }
+  layer1?: { x: number; y: number }
+  layer2?: { x: number; y: number }
 }
 
 export default function Sobrepor() {
@@ -40,6 +59,7 @@ export default function Sobrepor() {
       visible: true,
       isBase: true,
       pdfUrl: baseDrawing.pdfUrl || null,
+      alignmentTransform: null,
     },
     {
       id: secondDrawing.id,
@@ -50,11 +70,45 @@ export default function Sobrepor() {
       visible: true,
       isBase: false,
       pdfUrl: secondDrawing.pdfUrl || null,
+      alignmentTransform: null,
     },
   ])
 
   const [removeText, setRemoveText] = useState(false)
   const [page, setPage] = useState(1)
+
+  // ─── Drag and Drop / Reordering logic ───────────────────────────────────────
+  const [draggedIndex, setDraggedIndex] = useState<number | null>(null)
+
+  function moveLayer(index: number, direction: -1 | 1) {
+    const nextIndex = index + direction
+    if (nextIndex < 0 || nextIndex >= layers.length) return
+    const reordered = [...layers]
+    const temp = reordered[index]
+    reordered[index] = reordered[nextIndex]
+    reordered[nextIndex] = temp
+    setLayers(reordered)
+  }
+
+  function handleDragStart(e: React.DragEvent, index: number) {
+    setDraggedIndex(index)
+    e.dataTransfer.effectAllowed = 'move'
+  }
+
+  function handleDragOver(e: React.DragEvent, index: number) {
+    e.preventDefault()
+    if (draggedIndex === null || draggedIndex === index) return
+    const reordered = [...layers]
+    const draggedItem = reordered[draggedIndex]
+    reordered.splice(draggedIndex, 1)
+    reordered.splice(index, 0, draggedItem)
+    setDraggedIndex(index)
+    setLayers(reordered)
+  }
+
+  function handleDragEnd() {
+    setDraggedIndex(null)
+  }
 
   function updateLayer(layerId: string, updates: Partial<LayerDoc>) {
     setLayers(prev => prev.map(l => l.id === layerId ? { ...l, ...updates } : l))
@@ -72,10 +126,38 @@ export default function Sobrepor() {
       visible: true,
       isBase: false,
       pdfUrl: unused.pdfUrl || null,
+      alignmentTransform: null,
     }])
   }
 
   const visibleLayers = layers.filter(l => l.visible)
+
+  // ─── 2-Point Reference Alignment State ──────────────────────────────────────
+  const [alignState, setAlignState] = useState<AlignState>({
+    active: false,
+    layerId: null,
+    step: 'base1',
+  })
+
+  function startAlignment(layerId: string) {
+    setAlignState({
+      active: true,
+      layerId,
+      step: 'base1',
+    })
+  }
+
+  function cancelAlignment() {
+    setAlignState({
+      active: false,
+      layerId: null,
+      step: 'base1',
+    })
+  }
+
+  function resetAlignment(layerId: string) {
+    updateLayer(layerId, { alignmentTransform: null })
+  }
 
   // ─── PDF Render & Tint Pipeline ─────────────────────────────────────────────
   const [renderedPages, setRenderedPages] = useState<Record<string, RenderedPdfPage>>({})
@@ -118,7 +200,7 @@ export default function Sobrepor() {
     return () => {
       cancelled = true
     }
-  }, [visibleLayers.length, page, removeText, layers]) // layers dependency allows picking different files
+  }, [visibleLayers.length, page, removeText, layers])
 
   // Apply tint Drawing to rendered canvas outputs
   const tintedCanvases = useMemo(() => {
@@ -137,6 +219,70 @@ export default function Sobrepor() {
   const dimensions = firstRendered
     ? { width: firstRendered.width, height: firstRendered.height }
     : { width: 800, height: 600 }
+
+  // ─── Canvas Click Handler for Alignment points ──────────────────────────────
+  function handleCanvasClick(e: React.MouseEvent<HTMLDivElement>) {
+    if (!alignState.active || !alignState.layerId) return
+
+    const rect = e.currentTarget.getBoundingClientRect()
+    const clickX = e.clientX - rect.left
+    const clickY = e.clientY - rect.top
+
+    // Map screen coordinate to canvas resolution
+    const actualWidth = dimensions.width
+    const actualHeight = dimensions.height
+    const scaleX = actualWidth / rect.width
+    const scaleY = actualHeight / rect.height
+
+    const point = {
+      x: clickX * scaleX,
+      y: clickY * scaleY,
+    }
+
+    if (alignState.step === 'base1') {
+      setAlignState(prev => ({ ...prev, step: 'base2', base1: point }))
+    } else if (alignState.step === 'base2') {
+      setAlignState(prev => ({ ...prev, step: 'layer1', base2: point }))
+    } else if (alignState.step === 'layer1') {
+      setAlignState(prev => ({ ...prev, step: 'layer2', layer1: point }))
+    } else if (alignState.step === 'layer2') {
+      // Calculate final transform metrics
+      const b1 = alignState.base1!
+      const b2 = alignState.base2!
+      const l1 = alignState.layer1!
+      const l2 = point
+
+      const dx1 = b2.x - b1.x
+      const dy1 = b2.y - b1.y
+      const dist1 = Math.hypot(dx1, dy1)
+      const angle1 = Math.atan2(dy1, dx1)
+
+      const dx2 = l2.x - l1.x
+      const dy2 = l2.y - l1.y
+      const dist2 = Math.hypot(dx2, dy2)
+      const angle2 = Math.atan2(dy2, dx2)
+
+      const computedScale = dist2 > 0 ? dist1 / dist2 : 1
+      const computedAngle = angle1 - angle2
+
+      updateLayer(alignState.layerId, {
+        alignmentTransform: {
+          scale: computedScale,
+          angle: computedAngle,
+          base1: b1,
+          base2: b2,
+          layer1: l1,
+          layer2: l2,
+        },
+      })
+
+      setAlignState({
+        active: false,
+        layerId: null,
+        step: 'done',
+      })
+    }
+  }
 
   return (
     <div className="h-full flex flex-col space-y-4">
@@ -164,7 +310,27 @@ export default function Sobrepor() {
 
       <div className="flex-1 flex gap-4 min-h-0">
         {/* Left panel – layer controls */}
-        <div className="w-72 flex-shrink-0 space-y-3 overflow-y-auto pr-1">
+        <div className="w-80 flex-shrink-0 space-y-3 overflow-y-auto pr-1">
+          {/* Alignment Wizard Helper */}
+          {alignState.active && (
+            <Card className="p-3 border-2 border-orange-500 bg-orange-500/10 space-y-2">
+              <div className="text-xs font-bold text-orange-400 flex items-center gap-1.5">
+                <Move size={14} /> Alinhamento de Camada
+              </div>
+              <p className="text-xs text-slate-300">
+                {alignState.step === 'base1' && '1. Clique no primeiro ponto comum no projeto BASE (ex: pilar, poço).'}
+                {alignState.step === 'base2' && '2. Clique no segundo ponto comum no projeto BASE.'}
+                {alignState.step === 'layer1' && '3. Clique no primeiro ponto correspondente na CAMADA secundária.'}
+                {alignState.step === 'layer2' && '4. Clique no segundo ponto correspondente na CAMADA secundária.'}
+              </p>
+              <div className="flex gap-1.5 justify-end">
+                <Button size="sm" variant="ghost" onClick={cancelAlignment}>
+                  <X size={12} /> Cancelar
+                </Button>
+              </div>
+            </Card>
+          )}
+
           {/* Options */}
           <Card className="p-3">
             <div className="text-xs font-semibold mb-2" style={{ color: 'var(--white)' }}>Opções</div>
@@ -200,75 +366,132 @@ export default function Sobrepor() {
             </label>
           </Card>
 
-          {/* Layers */}
+          {/* Layers List (Draggable for reordering Z-index) */}
           <div className="space-y-2">
-            {layers.map(layer => (
-              <Card key={layer.id} className="p-3 space-y-3">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <div className="text-xs font-mono font-semibold truncate"
-                      style={{ color: 'var(--white)', maxWidth: 170 }}>
-                      {layer.code}
+            <div className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider px-1">
+              Camadas (Arraste para ordenar o Z-index)
+            </div>
+            {layers.map((layer, index) => (
+              <div
+                key={layer.id}
+                draggable
+                onDragStart={e => handleDragStart(e, index)}
+                onDragOver={e => handleDragOver(e, index)}
+                onDragEnd={handleDragEnd}
+                className="cursor-grab active:cursor-grabbing transition-transform"
+                style={{
+                  opacity: draggedIndex === index ? 0.4 : 1,
+                  transform: 'translateZ(0)', // hardware acceleration
+                }}
+              >
+                <Card className="p-3 space-y-3" style={{ border: `1px solid ${layer.color}33` }}>
+                  <div className="flex items-start justify-between gap-1">
+                    <div className="flex items-center gap-1">
+                      {/* Reorder Buttons (Useful for mobile/tablets) */}
+                      <div className="flex flex-col gap-0.5 mr-1 flex-shrink-0">
+                        <button
+                          onClick={() => moveLayer(index, -1)}
+                          disabled={index === 0}
+                          className="p-0.5 hover:bg-white/10 rounded disabled:opacity-30"
+                          style={{ color: 'var(--slate)' }}
+                        >
+                          <ArrowUp size={11} />
+                        </button>
+                        <button
+                          onClick={() => moveLayer(index, 1)}
+                          disabled={index === layers.length - 1}
+                          className="p-0.5 hover:bg-white/10 rounded disabled:opacity-30"
+                          style={{ color: 'var(--slate)' }}
+                        >
+                          <ArrowDown size={11} />
+                        </button>
+                      </div>
+                      <div>
+                        <div className="text-xs font-mono font-semibold truncate"
+                          style={{ color: 'var(--white)', maxWidth: 170 }}>
+                          {layer.code}
+                        </div>
+                        <div className="text-xs" style={{ color: 'var(--slate)' }}>
+                          {layer.discipline}
+                          {layer.isBase && (
+                            <span className="ml-1.5 px-1 py-0.5 rounded text-[9px] font-bold"
+                              style={{ background: 'var(--surface-mid)', color: 'var(--orange)' }}>
+                              BASE
+                            </span>
+                          )}
+                        </div>
+                      </div>
                     </div>
-                    <div className="text-xs" style={{ color: 'var(--slate)' }}>
-                      {layer.discipline}
-                      {layer.isBase && (
-                        <span className="ml-1.5 px-1 py-0.5 rounded text-xs font-bold"
-                          style={{ background: 'var(--surface-mid)', color: 'var(--orange)', fontSize: '9px' }}>
-                          BASE
-                        </span>
+                    <button
+                      onClick={() => updateLayer(layer.id, { visible: !layer.visible })}
+                      style={{ color: layer.visible ? 'var(--white)' : 'var(--slate)' }}
+                      className="p-1 hover:bg-white/15 rounded"
+                    >
+                      {layer.visible ? <Eye size={14} /> : <EyeOff size={14} />}
+                    </button>
+                  </div>
+
+                  {/* Color picker */}
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] text-slate-400">Cor</span>
+                    <div className="flex gap-1 ml-auto">
+                      {OVERLAY_COLORS.map(c => (
+                        <button
+                          key={c}
+                          className="w-3.5 h-3.5 rounded-full transition-all"
+                          style={{
+                            background: c,
+                            outline: layer.color === c ? `2px solid white` : 'none',
+                            outlineOffset: '1px',
+                          }}
+                          onClick={() => updateLayer(layer.id, { color: c })}
+                        />
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Opacity */}
+                  <div className="space-y-1">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] text-slate-400">Opacidade</span>
+                      <span className="text-xs font-mono" style={{ color: 'var(--white)' }}>{layer.opacity}%</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="0"
+                      max="100"
+                      value={layer.opacity}
+                      onChange={e => updateLayer(layer.id, { opacity: Number(e.target.value) })}
+                      className="w-full h-1 rounded-full appearance-none cursor-pointer"
+                      style={{ accentColor: layer.color }}
+                    />
+                  </div>
+
+                  {/* Alignment options */}
+                  {!layer.isBase && (
+                    <div className="flex items-center gap-2 pt-1 border-t border-slate-700/50 justify-between">
+                      {layer.alignmentTransform ? (
+                        <>
+                          <span className="text-[10px] text-green-400 font-medium">✓ Alinhado</span>
+                          <button
+                            onClick={() => resetAlignment(layer.id)}
+                            className="text-[10px] text-red-400 hover:underline flex items-center gap-0.5"
+                          >
+                            <RotateCcw size={10} /> Reset
+                          </button>
+                        </>
+                      ) : (
+                        <button
+                          onClick={() => startAlignment(layer.id)}
+                          className="text-[10px] text-orange-400 hover:underline flex items-center gap-1"
+                        >
+                          <Move size={10} /> Alinhar por Pontos
+                        </button>
                       )}
-                      <span
-                        className="ml-1.5 inline-block w-1.5 h-1.5 rounded-full"
-                        style={{ background: layer.pdfUrl ? '#22C55E' : '#EAB308' }}
-                        title={layer.pdfUrl ? 'PDF disponível' : 'Sem PDF (modo demo)'}
-                      />
                     </div>
-                  </div>
-                  <button
-                    onClick={() => updateLayer(layer.id, { visible: !layer.visible })}
-                    style={{ color: layer.visible ? 'var(--white)' : 'var(--slate)' }}
-                  >
-                    {layer.visible ? <Eye size={15} /> : <EyeOff size={15} />}
-                  </button>
-                </div>
-
-                {/* Color picker */}
-                <div className="flex items-center gap-2">
-                  <span className="text-xs" style={{ color: 'var(--slate)' }}>Cor</span>
-                  <div className="flex gap-1 ml-auto">
-                    {OVERLAY_COLORS.map(c => (
-                      <button
-                        key={c}
-                        className="w-4 h-4 rounded-full transition-all"
-                        style={{
-                          background: c,
-                          outline: layer.color === c ? `2px solid white` : 'none',
-                          outlineOffset: '1px',
-                        }}
-                        onClick={() => updateLayer(layer.id, { color: c })}
-                      />
-                    ))}
-                  </div>
-                </div>
-
-                {/* Opacity */}
-                <div className="space-y-1">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs" style={{ color: 'var(--slate)' }}>Opacidade</span>
-                    <span className="text-xs font-mono" style={{ color: 'var(--white)' }}>{layer.opacity}%</span>
-                  </div>
-                  <input
-                    type="range"
-                    min="0"
-                    max="100"
-                    value={layer.opacity}
-                    onChange={e => updateLayer(layer.id, { opacity: Number(e.target.value) })}
-                    className="w-full h-1 rounded-full appearance-none cursor-pointer"
-                    style={{ accentColor: layer.color }}
-                  />
-                </div>
-              </Card>
+                  )}
+                </Card>
+              </div>
             ))}
           </div>
 
@@ -278,7 +501,11 @@ export default function Sobrepor() {
         </div>
 
         {/* Right panel – stacked canvases */}
-        <div className="flex-1 rounded-xl overflow-auto bg-white border relative p-4 flex items-center justify-center" style={{ borderColor: 'var(--surface-border)' }}>
+        <div
+          className="flex-1 rounded-xl overflow-auto bg-white border relative p-4 flex items-center justify-center"
+          style={{ borderColor: 'var(--surface-border)', cursor: alignState.active ? 'crosshair' : 'default' }}
+          onClick={handleCanvasClick}
+        >
           {rendering && (
             <div className="absolute inset-0 bg-[#0d1825]/40 backdrop-blur-xs flex items-center justify-center z-30">
               <Loader2 className="animate-spin text-orange-500" size={32} />
@@ -292,7 +519,7 @@ export default function Sobrepor() {
           )}
 
           {visibleLayers.length === 0 ? (
-            <div className="text-sm" style={{ color: 'var(--slate)' }}>
+            <div className="text-sm text-slate-500">
               Nenhuma camada visível
             </div>
           ) : (
@@ -315,19 +542,78 @@ export default function Sobrepor() {
                     className="absolute inset-0 transition-opacity duration-150"
                     style={{ opacity: layer.opacity / 100 }}
                   >
-                    {/* Render raw canvas directly in DOM */}
+                    {/* Render tinted canvas using transformation matrix if aligned */}
                     <canvas
                       ref={el => {
                         if (!el) return
                         el.width = canvas.width
                         el.height = canvas.height
-                        el.getContext('2d')?.drawImage(canvas, 0, 0)
+                        const ctx = el.getContext('2d')
+                        if (!ctx) return
+                        ctx.clearRect(0, 0, canvas.width, canvas.height)
+                        ctx.save()
+
+                        const transform = layer.alignmentTransform
+                        if (transform) {
+                          // Apply Similarity Transformation
+                          ctx.translate(transform.base1.x, transform.base1.y)
+                          ctx.rotate(transform.angle)
+                          ctx.scale(transform.scale, transform.scale)
+                          ctx.translate(-transform.layer1.x, -transform.layer1.y)
+                        }
+
+                        ctx.drawImage(canvas, 0, 0)
+                        ctx.restore()
                       }}
                       className="w-full h-full block"
                     />
                   </div>
                 )
               })}
+
+              {/* Active Alignment Reference Pins (Interactive HTML Overlay) */}
+              {alignState.active && alignState.base1 && (
+                <div
+                  className="absolute w-5 h-5 -ml-2.5 -mt-2.5 rounded-full border-2 border-white flex items-center justify-center text-[10px] font-bold shadow z-30"
+                  style={{
+                    left: `${(alignState.base1.x / dimensions.width) * 100}%`,
+                    top: `${(alignState.base1.y / dimensions.height) * 100}%`,
+                    background: '#3B82F6',
+                    color: 'white',
+                  }}
+                  title="Base - Ponto 1"
+                >
+                  B1
+                </div>
+              )}
+              {alignState.active && alignState.base2 && (
+                <div
+                  className="absolute w-5 h-5 -ml-2.5 -mt-2.5 rounded-full border-2 border-white flex items-center justify-center text-[10px] font-bold shadow z-30"
+                  style={{
+                    left: `${(alignState.base2.x / dimensions.width) * 100}%`,
+                    top: `${(alignState.base2.y / dimensions.height) * 100}%`,
+                    background: '#22C55E',
+                    color: 'white',
+                  }}
+                  title="Base - Ponto 2"
+                >
+                  B2
+                </div>
+              )}
+              {alignState.active && alignState.layer1 && (
+                <div
+                  className="absolute w-5 h-5 -ml-2.5 -mt-2.5 rounded-full border-2 border-white flex items-center justify-center text-[10px] font-bold shadow z-30 animate-pulse"
+                  style={{
+                    left: `${(alignState.layer1.x / dimensions.width) * 100}%`,
+                    top: `${(alignState.layer1.y / dimensions.height) * 100}%`,
+                    background: '#EF4444',
+                    color: 'white',
+                  }}
+                  title="Camada - Ponto 1"
+                >
+                  C1
+                </div>
+              )}
             </div>
           )}
 
@@ -349,6 +635,7 @@ export default function Sobrepor() {
                 <span className="w-2.5 h-2.5 rounded-sm flex-shrink-0" style={{ background: l.color }} />
                 <span className="font-mono" style={{ color: l.color }}>{l.code.split('-')[2] || l.discipline}</span>
                 <span className="opacity-60">{l.opacity}%</span>
+                {l.alignmentTransform && <span className="text-[10px] text-green-400">★</span>}
               </div>
             ))}
           </div>
