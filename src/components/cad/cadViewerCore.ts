@@ -202,7 +202,13 @@ export async function initCADViewer(opts: CADViewerInitOptions): Promise<CADView
   // ── 6. API pública ────────────────────────────────────────────────────────
 
   async function loadFile(fileName: string, buffer: ArrayBuffer): Promise<boolean> {
-    const success = await manager.openDocument(fileName, buffer, {
+    // Extract original extension (.dwg or .dxf)
+    const isDxf = fileName.toLowerCase().endsWith('.dxf')
+    const virtualFileName = isDxf ? 'model.dxf' : 'model.dwg'
+
+    // Pass a safe ASCII virtual name to bypass Emscripten/LibreDWG WASM filesystem 
+    // crashes on accented or special unicode characters (like Á, É, Ç)
+    const success = await manager.openDocument(virtualFileName, buffer, {
       mode: AcEdOpenMode.Read,
       progressiveRendering: true,
     })
