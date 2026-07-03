@@ -206,13 +206,39 @@ export async function initCADViewer(opts: CADViewerInitOptions): Promise<CADView
     const isDxf = fileName.toLowerCase().endsWith('.dxf')
     const virtualFileName = isDxf ? 'model.dxf' : 'model.dwg'
 
-    // Pass a safe ASCII virtual name to bypass Emscripten/LibreDWG WASM filesystem 
-    // crashes on accented or special unicode characters (like Á, É, Ç)
-    const success = await manager.openDocument(virtualFileName, buffer, {
-      mode: AcEdOpenMode.Read,
-      progressiveRendering: true,
-    })
-    return success
+    const doc = manager.curDocument
+    let lastError: string | null = null
+
+    const handleProgress = (args: any) => {
+      console.log(`[CADProgress] Stage: ${args.stage}, SubStage: ${args.subStage}, Status: ${args.subStageStatus}, %: ${args.percentage}, Data:`, args.data)
+      if (args.subStageStatus === 'ERROR') {
+        lastError = args.data || 'Erro interno desconhecido na decodificação do desenho.'
+      }
+    }
+
+    // Register progress listener to capture internal errors
+    if (doc?.database?.events?.openProgress?.addEventListener) {
+      doc.database.events.openProgress.addEventListener(handleProgress)
+    }
+
+    try {
+      // Pass a safe ASCII virtual name to bypass Emscripten/LibreDWG WASM filesystem 
+      // crashes on accented or special unicode characters (like Á, É, Ç)
+      const success = await manager.openDocument(virtualFileName, buffer, {
+        mode: AcEdOpenMode.Read,
+        progressiveRendering: true,
+      })
+
+      if (!success && lastError) {
+        throw new Error(lastError)
+      }
+      return success
+    } finally {
+      // Always cleanup event listener
+      if (doc?.database?.events?.openProgress?.removeEventListener) {
+        doc.database.events.openProgress.removeEventListener(handleProgress)
+      }
+    }
   }
 
   function setPan() {
