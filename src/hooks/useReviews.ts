@@ -154,5 +154,69 @@ export function useReviews(drawingId?: string) {
     return newIssue
   }, [])
 
-  return { reviews, issues, loading, error, usingMockData, refresh, createIssue }
+  // ── Submit Review Decision ──────────────────────────────────────────────────
+  const submitDecision = useCallback(async (params: {
+    drawingId: string
+    drawingCode: string
+    revision: string
+    reviewerId: string
+    reviewerName: string
+    decision: 'approve' | 'approve_with_notes' | 'reject'
+    notes?: string
+  }) => {
+    // Map decision to corresponding drawing status
+    const statusMap = {
+      approve: 'aprovado',
+      approve_with_notes: 'aprovado_com_ressalva',
+      reject: 'rejeitado',
+    } as const
+    const newStatus = statusMap[params.decision]
+
+    if (!SUPABASE_CONFIGURED) {
+      const newReview: Review = {
+        id: `rev-${Date.now()}`,
+        drawingId: params.drawingId,
+        drawingCode: params.drawingCode,
+        revision: params.revision,
+        reviewerName: params.reviewerName,
+        startedAt: new Date().toISOString(),
+        completedAt: new Date().toISOString(),
+        status: 'concluido',
+        decision: params.decision,
+        notes: params.notes,
+        issues: [],
+      }
+      setReviews(prev => [newReview, ...prev])
+      return
+    }
+
+    // 1. Insert review record
+    const { data: reviewData, error: reviewErr } = await supabase.from('reviews').insert({
+      drawing_id: params.drawingId,
+      drawing_code: params.drawingCode,
+      revision: params.revision,
+      reviewer_id: params.reviewerId,
+      reviewer_name: params.reviewerName,
+      status: 'concluido',
+      decision: params.decision,
+      notes: params.notes || null,
+      completed_at: new Date().toISOString(),
+    }).select().single()
+
+    if (reviewErr) throw reviewErr
+
+    // 2. Update drawing status
+    const { error: drawingErr } = await supabase
+      .from('drawings')
+      .update({ status: newStatus })
+      .eq('id', params.drawingId)
+
+    if (drawingErr) throw drawingErr
+
+    // Local state refresh
+    const freshReview = mapReview(reviewData as Record<string, unknown>, [])
+    setReviews(prev => [freshReview, ...prev])
+  }, [])
+
+  return { reviews, issues, loading, error, usingMockData, refresh, createIssue, submitDecision }
 }

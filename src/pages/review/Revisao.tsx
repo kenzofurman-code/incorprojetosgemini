@@ -66,7 +66,7 @@ export default function Revisao() {
   const drawing = (id ? drawings.find(d => d.id === id) : null) || MOCK_DRAWINGS[2]
 
   // Load reviews + issues for this drawing
-  const { issues, usingMockData, createIssue } = useReviews(drawing?.id)
+  const { issues, usingMockData, createIssue, submitDecision } = useReviews(drawing?.id)
 
   const [selectedIssue, setSelectedIssue] = useState<string | null>(null)
   const [addingIssue, setAddingIssue] = useState(false)
@@ -78,7 +78,9 @@ export default function Revisao() {
   })
   const [pendingPos, setPendingPos] = useState<{ x: number; y: number } | null>(null)
   const [decision, setDecision] = useState<'approve' | 'approve_with_notes' | 'reject' | null>(null)
+  const [notes, setNotes] = useState('')
   const [showDecisionPanel, setShowDecisionPanel] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
 
   function handleCanvasClick(e: React.MouseEvent<HTMLDivElement>) {
     if (!addingIssue) return
@@ -104,6 +106,32 @@ export default function Revisao() {
     setNewIssue({ title: '', description: '', category: 'conflito_projeto', priority: 'alta' })
     setPendingPos(null)
     setAddingIssue(false)
+  }
+
+  async function handleConfirmDecision() {
+    if (!decision || !drawing) return
+    setSubmitting(true)
+    try {
+      await submitDecision({
+        drawingId: drawing.id,
+        drawingCode: drawing.code,
+        revision: drawing.revision,
+        reviewerId: currentUser.id,
+        reviewerName: currentUser.name,
+        decision,
+        notes: notes.trim(),
+      })
+      setShowDecisionPanel(false)
+      setDecision(null)
+      setNotes('')
+      // Go back to projects lists after reviewing
+      navigate('/projetos')
+    } catch (err) {
+      console.error('[Revisao] Error confirming decision:', err)
+      alert(err instanceof Error ? err.message : 'Falha ao confirmar decisão')
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   const selectedIssueData = issues.find(i => i.id === selectedIssue)
@@ -192,12 +220,17 @@ export default function Revisao() {
           <textarea
             placeholder="Observações (opcional)..."
             rows={2}
+            value={notes}
+            onChange={e => setNotes(e.target.value)}
+            disabled={submitting}
             className="w-full text-sm rounded-lg px-3 py-2 outline-none resize-none"
             style={{ background: 'var(--surface-mid)', border: '1px solid var(--surface-border)', color: 'var(--white)' }}
           />
           <div className="flex gap-2 mt-2 justify-end">
-            <Button variant="ghost" size="sm" onClick={() => setShowDecisionPanel(false)}>Cancelar</Button>
-            <Button size="sm" disabled={!decision}>Confirmar Decisão</Button>
+            <Button variant="ghost" size="sm" onClick={() => setShowDecisionPanel(false)} disabled={submitting}>Cancelar</Button>
+            <Button size="sm" onClick={handleConfirmDecision} disabled={!decision || submitting}>
+              {submitting ? 'Confirmando...' : 'Confirmar Decisão'}
+            </Button>
           </div>
         </Card>
       )}
