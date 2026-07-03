@@ -439,7 +439,13 @@ export default function IFCViewer({ onIssueCreated, modelLabel, className = '', 
       components.get(OBC.FragmentsManager)
 
       const ifcLoader = components.get(OBC.IfcLoader)
-      await ifcLoader.setup()
+      await ifcLoader.setup({
+        autoSetWasm: false,
+        wasm: {
+          path: "/",
+          absolute: false,
+        },
+      })
 
       const buffer = await file.arrayBuffer()
       const uint8 = new Uint8Array(buffer)
