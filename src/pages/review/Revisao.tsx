@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
   ArrowLeft, FileCheck, Plus, MessageSquare,
@@ -10,6 +10,7 @@ import { useReviews } from '../../hooks/useReviews'
 import { useDrawings } from '../../hooks/useDrawings'
 import { useApp } from '../../context/AppContext'
 import type { Issue, IssueCategory } from '../../types'
+import { renderPdfPage, type RenderedPdfPage } from '../../lib/pdf-comparison'
 
 const CATEGORY_OPTIONS: { value: IssueCategory; label: string; color: string }[] = [
   { value: 'conflito_projeto',  label: 'Conflito de Projeto',  color: '#EF4444' },
@@ -55,6 +56,26 @@ function IssuePin({ issue, index, selected, onClick }: {
   )
 }
 
+interface CanvasViewProps {
+  source: HTMLCanvasElement | null
+  className?: string
+  style?: React.CSSProperties
+}
+
+function CanvasView({ source, className = '', style }: CanvasViewProps) {
+  const ref = useRef<HTMLCanvasElement>(null)
+  useEffect(() => {
+    const canvas = ref.current
+    if (!canvas || !source) return
+    canvas.width = source.width
+    canvas.height = source.height
+    canvas.getContext('2d')?.drawImage(source, 0, 0)
+  }, [source])
+
+  if (!source) return null
+  return <canvas className={`block ${className}`} ref={ref} style={style} />
+}
+
 export default function Revisao() {
   const { id } = useParams()
   const navigate = useNavigate()
@@ -79,6 +100,39 @@ export default function Revisao() {
   const [notes, setNotes] = useState('')
   const [showDecisionPanel, setShowDecisionPanel] = useState(false)
   const [submitting, setSubmitting] = useState(false)
+
+  // PDF Page loader state
+  const [renderedPage, setRenderedPage] = useState<RenderedPdfPage | null>(null)
+  const [renderingPdf, setRenderingPdf] = useState(false)
+  const [pdfError, setPdfError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!drawing?.pdfUrl) {
+      setRenderedPage(null)
+      return
+    }
+    let cancelled = false
+    setRenderingPdf(true)
+    setPdfError(null)
+
+    renderPdfPage(drawing.pdfUrl, 1, false)
+      .then(page => {
+        if (!cancelled) setRenderedPage(page)
+      })
+      .catch(err => {
+        if (!cancelled) {
+          console.error('[Revisao] Error rendering drawing PDF:', err)
+          setPdfError(err instanceof Error ? err.message : 'Erro ao carregar o PDF da prancha.')
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setRenderingPdf(false)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [drawing?.pdfUrl])
 
   function handleCanvasClick(e: React.MouseEvent<HTMLDivElement>) {
     if (!addingIssue) return
@@ -313,61 +367,106 @@ export default function Revisao() {
             </div>
           )}
           <div
-            className="flex-1 relative rounded-xl overflow-hidden cursor-crosshair"
+            className="flex-1 relative rounded-xl overflow-auto cursor-crosshair bg-white border flex items-center justify-center p-4"
             style={{
-              background: '#f5f0eb',
-              border: addingIssue ? '2px solid var(--orange)' : '1px solid var(--surface-border)',
-              minHeight: '400px',
+              borderColor: addingIssue ? 'var(--orange)' : 'var(--surface-border)',
+              minHeight: '450px',
             }}
             onClick={handleCanvasClick}
           >
-            {/* Simulated floor plan SVG */}
-            <svg width="100%" height="100%" viewBox="0 0 400 300" style={{ position: 'absolute', inset: 0 }}>
-              <defs>
-                <pattern id="hatch" width="8" height="8" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
-                  <line x1="0" y1="0" x2="0" y2="8" stroke="#bbb" strokeWidth="1" />
-                </pattern>
-              </defs>
-              <rect x="30" y="30" width="340" height="240" fill="none" stroke="#333" strokeWidth="2.5" />
-              <rect x="40" y="40" width="118" height="118" fill="url(#hatch)" opacity="0.2" />
-              <line x1="160" y1="30" x2="160" y2="200" stroke="#333" strokeWidth="1.5" />
-              <line x1="30" y1="150" x2="160" y2="150" stroke="#333" strokeWidth="1.5" />
-              <line x1="250" y1="30" x2="250" y2="160" stroke="#333" strokeWidth="1.5" />
-              <line x1="160" y1="200" x2="370" y2="200" stroke="#333" strokeWidth="1.5" />
-              <line x1="30" y1="15" x2="370" y2="15" stroke="#333" strokeWidth="0.5" />
-              <text x="200" y="12" textAnchor="middle" fill="#333" fontSize="8">8.50m</text>
-              <text x="90" y="95" textAnchor="middle" fill="#555" fontSize="11" fontWeight="500">SALA</text>
-              <text x="90" y="178" textAnchor="middle" fill="#555" fontSize="11" fontWeight="500">QUARTO 01</text>
-              <text x="205" y="90" textAnchor="middle" fill="#555" fontSize="11" fontWeight="500">COZINHA</text>
-              <text x="310" y="90" textAnchor="middle" fill="#555" fontSize="11" fontWeight="500">VARANDA</text>
-              <text x="265" y="228" textAnchor="middle" fill="#555" fontSize="11" fontWeight="500">QUARTO 02</text>
-              <rect x="30" y="260" width="340" height="30" fill="none" stroke="#333" strokeWidth="0.5" />
-              <text x="40" y="278" fill="#333" fontSize="7">{drawing?.title}</text>
-              <text x="350" y="278" textAnchor="end" fill="#333" fontSize="8" fontWeight="bold">{drawing?.revision}</text>
-            </svg>
+            {renderingPdf && (
+              <div className="absolute inset-0 bg-[#0d1825]/40 backdrop-blur-xs flex items-center justify-center z-30">
+                <Loader2 className="animate-spin text-orange-500" size={32} />
+              </div>
+            )}
 
-            {/* Issue pins */}
-            {issues.map((issue, idx) => (
-              <IssuePin
-                key={issue.id}
-                issue={issue}
-                index={idx}
-                selected={selectedIssue === issue.id}
-                onClick={() => setSelectedIssue(selectedIssue === issue.id ? null : issue.id)}
-              />
-            ))}
-
-            {/* Pending position marker */}
-            {pendingPos && (
+            {renderedPage ? (
               <div
-                className="absolute w-5 h-5 rounded-full border-2 border-white animate-pulse"
+                className="relative"
                 style={{
-                  left: `${pendingPos.x}%`,
-                  top: `${pendingPos.y}%`,
-                  transform: 'translate(-50%,-50%)',
-                  background: 'var(--orange)',
+                  width: `${renderedPage.canvas.width}px`,
+                  height: `${renderedPage.canvas.height}px`,
+                  maxWidth: '100%'
                 }}
-              />
+              >
+                {/* Real PDF Canvas */}
+                <CanvasView source={renderedPage.canvas} className="w-full h-full" />
+
+                {/* Issue pins mapped on top of real canvas */}
+                {issues.map((issue, idx) => (
+                  <IssuePin
+                    key={issue.id}
+                    issue={issue}
+                    index={idx}
+                    selected={selectedIssue === issue.id}
+                    onClick={() => setSelectedIssue(selectedIssue === issue.id ? null : issue.id)}
+                  />
+                ))}
+
+                {/* Pending position marker */}
+                {pendingPos && (
+                  <div
+                    className="absolute w-5 h-5 rounded-full border-2 border-white animate-pulse"
+                    style={{
+                      left: `${pendingPos.x}%`,
+                      top: `${pendingPos.y}%`,
+                      transform: 'translate(-50%,-50%)',
+                      background: 'var(--orange)',
+                    }}
+                  />
+                )}
+              </div>
+            ) : (
+              // Fallback simulated floor plan SVG when no PDF is uploaded or failed
+              <div className="relative w-full h-full max-w-[600px] aspect-[4/3] flex items-center justify-center">
+                <svg width="100%" height="100%" viewBox="0 0 400 300" style={{ position: 'absolute', inset: 0 }}>
+                  <defs>
+                    <pattern id="hatch" width="8" height="8" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+                      <line x1="0" y1="0" x2="0" y2="8" stroke="#bbb" strokeWidth="1" />
+                    </pattern>
+                  </defs>
+                  <rect x="30" y="30" width="340" height="240" fill="none" stroke="#333" strokeWidth="2.5" />
+                  <rect x="40" y="40" width="118" height="118" fill="url(#hatch)" opacity="0.2" />
+                  <line x1="160" y1="30" x2="160" y2="200" stroke="#333" strokeWidth="1.5" />
+                  <line x1="30" y1="150" x2="160" y2="150" stroke="#333" strokeWidth="1.5" />
+                  <line x1="250" y1="30" x2="250" y2="160" stroke="#333" strokeWidth="1.5" />
+                  <line x1="160" y1="200" x2="370" y2="200" stroke="#333" strokeWidth="1.5" />
+                  <line x1="30" y1="15" x2="370" y2="15" stroke="#333" strokeWidth="0.5" />
+                  <text x="200" y="12" textAnchor="middle" fill="#333" fontSize="8">8.50m</text>
+                  <text x="90" y="95" textAnchor="middle" fill="#555" fontSize="11" fontWeight="500">SALA</text>
+                  <text x="90" y="178" textAnchor="middle" fill="#555" fontSize="11" fontWeight="500">QUARTO 01</text>
+                  <text x="205" y="90" textAnchor="middle" fill="#555" fontSize="11" fontWeight="500">COZINHA</text>
+                  <text x="310" y="90" textAnchor="middle" fill="#555" fontSize="11" fontWeight="500">VARANDA</text>
+                  <text x="265" y="228" textAnchor="middle" fill="#555" fontSize="11" fontWeight="500">QUARTO 02</text>
+                  <rect x="30" y="260" width="340" height="30" fill="none" stroke="#333" strokeWidth="0.5" />
+                  <text x="40" y="278" fill="#333" fontSize="7">{drawing?.title || 'Planta de Exemplo'}</text>
+                  <text x="350" y="278" textAnchor="end" fill="#333" fontSize="8" fontWeight="bold">{drawing?.revision || 'R00'}</text>
+                </svg>
+
+                {/* Issue pins mapped on top of SVG */}
+                {issues.map((issue, idx) => (
+                  <IssuePin
+                    key={issue.id}
+                    issue={issue}
+                    index={idx}
+                    selected={selectedIssue === issue.id}
+                    onClick={() => setSelectedIssue(selectedIssue === issue.id ? null : issue.id)}
+                  />
+                ))}
+
+                {/* Pending position marker */}
+                {pendingPos && (
+                  <div
+                    className="absolute w-5 h-5 rounded-full border-2 border-white animate-pulse"
+                    style={{
+                      left: `${pendingPos.x}%`,
+                      top: `${pendingPos.y}%`,
+                      transform: 'translate(-50%,-50%)',
+                      background: 'var(--orange)',
+                    }}
+                  />
+                )}
+              </div>
             )}
           </div>
         </div>
