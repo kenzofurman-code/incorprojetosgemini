@@ -713,16 +713,18 @@ export default function IFCViewer({ onIssueCreated, modelLabel, className = '', 
 
         {/* Drop zone overlay when no model loaded */}
         {!loadedModelName && !isLoading && initialized && (
-          <label
-            className="absolute inset-0 flex flex-col items-center justify-center cursor-pointer z-10 transition-colors hover:bg-white/5"
-            htmlFor="ifc-file-input"
+          <div
+            className="absolute inset-0 flex flex-col items-center justify-center z-10 p-4"
+            style={{
+              background: 'rgba(15,25,35,0.85)',
+              backdropFilter: 'blur(4px)',
+            }}
           >
             <div
-              className="flex flex-col items-center gap-3 p-8 rounded-2xl"
+              className="flex flex-col items-center gap-3 p-8 rounded-2xl w-full max-w-sm"
               style={{
-                background: 'rgba(15,25,35,0.85)',
+                background: 'var(--surface-card)',
                 border: '2px dashed var(--surface-border)',
-                backdropFilter: 'blur(4px)',
               }}
             >
               <Upload size={36} style={{ color: 'var(--slate)' }} />
@@ -731,17 +733,41 @@ export default function IFCViewer({ onIssueCreated, modelLabel, className = '', 
                   Carregar modelo IFC
                 </div>
                 <div className="text-xs mt-1" style={{ color: 'var(--slate)' }}>
-                  Arraste o arquivo .ifc aqui ou clique para selecionar
+                  Arraste o arquivo .ifc aqui ou selecione
                 </div>
               </div>
-              <div
-                className="text-xs px-3 py-1.5 rounded-lg font-medium"
-                style={{ background: 'var(--orange)', color: 'white' }}
-              >
-                Selecionar arquivo .IFC
+              <div className="flex flex-col gap-2 w-full mt-2">
+                <label
+                  htmlFor="ifc-file-input"
+                  className="text-center text-xs px-3 py-2 rounded-lg font-medium cursor-pointer transition-all hover:bg-orange-600 block"
+                  style={{ background: 'var(--orange)', color: 'white' }}
+                >
+                  Selecionar arquivo .IFC
+                </label>
+                <button
+                  type="button"
+                  onClick={async (e) => {
+                    e.stopPropagation()
+                    setIsLoading(true)
+                    try {
+                      const res = await fetch('/test-files/test.ifc')
+                      if (!res.ok) throw new Error('Não foi possível obter o arquivo de teste no servidor.')
+                      const blob = await res.blob()
+                      const file = new File([blob], '078-EX-HID-0002-MOD-EMB_HID-R03.ifc', { type: 'application/octet-stream' })
+                      await loadIFC(file)
+                    } catch (err) {
+                      alert(`Erro: ${err instanceof Error ? err.message : String(err)}`)
+                    } finally {
+                      setIsLoading(false)
+                    }
+                  }}
+                  className="text-xs px-3 py-2 rounded-lg font-medium border border-orange-500/40 text-orange-400 hover:bg-orange-500/10 cursor-pointer transition-all block w-full"
+                >
+                  Carregar Prancha de Teste 3D (IFC)
+                </button>
               </div>
             </div>
-          </label>
+          </div>
         )}
         <input
           id="ifc-file-input"
