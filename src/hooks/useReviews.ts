@@ -190,12 +190,16 @@ export function useReviews(drawingId?: string) {
       return
     }
 
+    // Validate if reviewerId is a valid UUID, otherwise default to null to prevent Postgres crash on mock IDs
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(params.reviewerId)
+    const safeReviewerId = isUuid ? params.reviewerId : null
+
     // 1. Insert review record
     const { data: reviewData, error: reviewErr } = await supabase.from('reviews').insert({
       drawing_id: params.drawingId,
       drawing_code: params.drawingCode,
       revision: params.revision,
-      reviewer_id: params.reviewerId,
+      reviewer_id: safeReviewerId,
       reviewer_name: params.reviewerName,
       status: 'concluido',
       decision: params.decision,
