@@ -347,7 +347,7 @@ export default function IFCViewer({ onIssueCreated, modelLabel, className = '', 
 
   // ─── Initialize Three.js / OBC world ────────────────────────────────────
   useEffect(() => {
-    if (!containerRef.current || initialized) return
+    if (!containerRef.current || componentsRef.current) return
 
     let components: OBC.Components | null = null
 
@@ -370,8 +370,7 @@ export default function IFCViewer({ onIssueCreated, modelLabel, className = '', 
         world.scene.three.background = new THREE.Color(0x0f1923)
 
         // Renderer — attach to our container div
-        // preserveDrawingBuffer: true é necessário para toDataURL() funcionar
-        // no botão "Criar Anotação de Issue"
+        // preserveDrawingBuffer: true is required for toDataURL() screenshot
         world.renderer = new OBC.SimpleRenderer(components, containerRef.current!, {
           preserveDrawingBuffer: true,
         })
@@ -398,6 +397,19 @@ export default function IFCViewer({ onIssueCreated, modelLabel, className = '', 
         dirLight.position.set(10, 20, 10)
         world.scene.three.add(dirLight)
 
+        // ── OBRIGATÓRIO: Inicializar os Fragmentos PRIMEIRO ──
+        components.get(OBC.FragmentsManager)
+
+        // ── Inicializar o Carregador IFC APÓS os fragmentos ──
+        const ifcLoader = components.get(OBC.IfcLoader)
+        await ifcLoader.setup({
+          autoSetWasm: false,
+          wasm: {
+            path: "/",
+            absolute: false,
+          },
+        })
+
         // Resize observer
         const observer = new ResizeObserver(() => {
           if (!containerRef.current || !world.renderer) return
@@ -421,8 +433,13 @@ export default function IFCViewer({ onIssueCreated, modelLabel, className = '', 
     init()
 
     return () => {
-      if (components) {
-        try { components.dispose() } catch (_) {}
+      if (componentsRef.current) {
+        try {
+          componentsRef.current.dispose()
+        } catch (e) {
+          console.warn('[IFCViewer] Error during dispose:', e)
+        }
+        componentsRef.current = null
       }
     }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
@@ -435,17 +452,7 @@ export default function IFCViewer({ onIssueCreated, modelLabel, className = '', 
 
     setIsLoading(true)
     try {
-      // Initialize FragmentsManager first (required by TOC v3)
-      components.get(OBC.FragmentsManager)
-
       const ifcLoader = components.get(OBC.IfcLoader)
-      await ifcLoader.setup({
-        autoSetWasm: false,
-        wasm: {
-          path: "/",
-          absolute: false,
-        },
-      })
 
       const buffer = await file.arrayBuffer()
       const uint8 = new Uint8Array(buffer)
