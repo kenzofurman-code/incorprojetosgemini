@@ -435,6 +435,9 @@ export default function IFCViewer({ onIssueCreated, modelLabel, className = '', 
 
     setIsLoading(true)
     try {
+      // Initialize FragmentsManager first (required by TOC v3)
+      components.get(OBC.FragmentsManager)
+
       const ifcLoader = components.get(OBC.IfcLoader)
       await ifcLoader.setup()
 
