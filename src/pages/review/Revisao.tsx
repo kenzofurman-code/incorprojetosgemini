@@ -1,8 +1,9 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
   ArrowLeft, FileCheck, Plus, MessageSquare,
-  CheckCircle, XCircle, AlertTriangle, Layers, Loader2
+  CheckCircle, XCircle, AlertTriangle, Layers, Loader2,
+  ZoomIn, ZoomOut, Square, Edit3, MapPin
 } from 'lucide-react'
 import { Card, Button, IssueCategoryBadge, StatusBadge, DataSourceBadge, DrawingQrCode } from '../../components/ui'
 import { MOCK_DRAWINGS } from '../../data/mockData'
@@ -22,17 +23,56 @@ const CATEGORY_OPTIONS: { value: IssueCategory; label: string; color: string }[]
   { value: 'outro',             label: 'Outro',                color: '#6B7280' },
 ]
 
+// Parse serialized markup from description
+interface ParsedMarkup {
+  type: 'pin' | 'rect' | 'scribble'
+  x: number
+  y: number
+  w?: number
+  h?: number
+  points?: { x: number; y: number }[]
+  realDescription: string
+}
+
+function parseIssueDescription(desc: string): ParsedMarkup {
+  try {
+    const data = JSON.parse(desc)
+    if (data && (data.type === 'rect' || data.type === 'scribble' || data.type === 'pin')) {
+      return data
+    }
+  } catch {}
+  return {
+    type: 'pin',
+    x: 0,
+    y: 0,
+    realDescription: desc,
+  }
+}
+
 function IssuePin({ issue, index, selected, onClick }: {
   issue: Issue; index: number; selected: boolean; onClick: () => void
 }) {
   const cat = CATEGORY_OPTIONS.find(c => c.value === issue.category)
   const color = cat?.color || '#6B7280'
+  const markup = parseIssueDescription(issue.description)
+
+  // Pins are located at issue x and y coordinates
+  const posX = markup.type === 'pin' ? issue.x : markup.x
+  const posY = markup.type === 'pin' ? issue.y : markup.y
 
   return (
     <div
-      className="absolute cursor-pointer group"
-      style={{ left: `${issue.x}%`, top: `${issue.y}%`, transform: 'translate(-50%, -100%)' }}
-      onClick={onClick}
+      className="absolute cursor-pointer group z-20"
+      style={{
+        left: `${posX}%`,
+        top: `${posY}%`,
+        transform: 'translate(-50%, -100%)',
+        pointerEvents: 'auto',
+      }}
+      onClick={(e) => {
+        e.stopPropagation()
+        onClick()
+      }}
     >
       <div
         className="w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold text-white shadow-lg transition-transform"
@@ -46,7 +86,7 @@ function IssuePin({ issue, index, selected, onClick }: {
       </div>
       {/* Tooltip on hover */}
       <div
-        className="absolute bottom-8 left-1/2 -translate-x-1/2 w-40 p-2 rounded text-xs opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-20"
+        className="absolute bottom-8 left-1/2 -translate-x-1/2 w-40 p-2 rounded text-xs opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-30"
         style={{ background: 'var(--surface-card)', border: `1px solid ${color}`, color: 'var(--white)' }}
       >
         <div className="font-semibold truncate">{issue.title}</div>
@@ -80,7 +120,7 @@ export default function Revisao() {
   const { id } = useParams()
   const navigate = useNavigate()
   const { currentUser, currentProject } = useApp()
-  const projectId = currentProject.id  // Load drawings to find the one being reviewed
+  const projectId = currentProject.id
   const { drawings, loading: drawingsLoading } = useDrawings(projectId)
   const drawing = id ? drawings.find(d => d.id === id) : null
 
@@ -89,13 +129,16 @@ export default function Revisao() {
 
   const [selectedIssue, setSelectedIssue] = useState<string | null>(null)
   const [addingIssue, setAddingIssue] = useState(false)
+  const [markupTool, setMarkupTool] = useState<'pin' | 'rect' | 'scribble'>('pin')
+
   const [newIssue, setNewIssue] = useState({
     title: '',
     description: '',
     category: 'conflito_projeto' as IssueCategory,
     priority: 'alta' as 'alta' | 'media' | 'baixa',
   })
-  const [pendingPos, setPendingPos] = useState<{ x: number; y: number } | null>(null)
+
+  // Review states
   const [decision, setDecision] = useState<'approve' | 'approve_with_notes' | 'reject' | null>(null)
   const [notes, setNotes] = useState('')
   const [showDecisionPanel, setShowDecisionPanel] = useState(false)
@@ -134,29 +177,209 @@ export default function Revisao() {
     }
   }, [drawing?.pdfUrl])
 
-  function handleCanvasClick(e: React.MouseEvent<HTMLDivElement>) {
-    if (!addingIssue) return
-    const rect = e.currentTarget.getBoundingClientRect()
-    const x = ((e.clientX - rect.left) / rect.width) * 100
-    const y = ((e.clientY - rect.top) / rect.height) * 100
-    setPendingPos({ x, y })
+  const dimensions = renderedPage
+    ? { width: renderedPage.canvas.width, height: renderedPage.canvas.height }
+    : { width: 800, height: 600 }
+
+  // ─── Zoom & Pan State ──────────────────────────────────────────────────────
+  const [scale, setScale] = useState(1)
+  const [offset, setOffset] = useState({ x: 0, y: 0 })
+  const [isPanning, setIsPanning] = useState(false)
+  const [panStart, setPanStart] = useState({ x: 0, y: 0 })
+  const [spacePressed, setSpacePressed] = useState(false)
+  const containerRef = useRef<HTMLDivElement>(null)
+
+  // Catch Spacebar key listeners for panning shortcut
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.code === 'Space' && document.activeElement?.tagName !== 'INPUT' && document.activeElement?.tagName !== 'TEXTAREA') {
+        setSpacePressed(true)
+        e.preventDefault()
+      }
+    }
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.code === 'Space') {
+        setSpacePressed(false)
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    window.addEventListener('keyup', handleKeyUp)
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown)
+      window.removeEventListener('keyup', handleKeyUp)
+    }
+  }, [])
+
+  // Prevent browser window zoom on Ctrl + Wheel
+  useEffect(() => {
+    const container = containerRef.current
+    if (!container) return
+    const handleWheelPrevent = (e: WheelEvent) => {
+      if (e.ctrlKey) e.preventDefault()
+    }
+    container.addEventListener('wheel', handleWheelPrevent, { passive: false })
+    return () => {
+      container.removeEventListener('wheel', handleWheelPrevent)
+    }
+  }, [])
+
+  const handleWheel = (e: React.WheelEvent) => {
+    if (e.ctrlKey) {
+      e.preventDefault()
+      const zoomFactor = 1.15
+      const nextScale = e.deltaY < 0 ? scale * zoomFactor : scale / zoomFactor
+      const clampedScale = Math.min(Math.max(nextScale, 0.25), 8)
+
+      // Zoom towards mouse position
+      const rect = e.currentTarget.getBoundingClientRect()
+      const mouseX = e.clientX - rect.left
+      const mouseY = e.clientY - rect.top
+
+      const dx = mouseX - offset.x
+      const dy = mouseY - offset.y
+
+      setOffset({
+        x: mouseX - dx * (clampedScale / scale),
+        y: mouseY - dy * (clampedScale / scale),
+      })
+      setScale(clampedScale)
+    }
+  }
+
+  // ─── Drawing / Markup States & Events ──────────────────────────────────────
+  const [drawingPoints, setDrawingPoints] = useState<{ x: number; y: number }[]>([])
+  const [boxStart, setBoxStart] = useState<{ x: number; y: number } | null>(null)
+  const [boxCurrent, setBoxCurrent] = useState<{ x: number; y: number } | null>(null)
+  const [pendingMarkup, setPendingMarkup] = useState<any | null>(null)
+
+  const handleMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+    const isMiddleButton = e.button === 1
+    const isRightButton = e.button === 2
+    const canPan = !addingIssue || spacePressed || isMiddleButton || isRightButton
+
+    if (canPan) {
+      setIsPanning(true)
+      setPanStart({ x: e.clientX - offset.x, y: e.clientY - offset.y })
+      e.preventDefault()
+      return
+    }
+
+    if (addingIssue) {
+      const rect = e.currentTarget.getBoundingClientRect()
+      // Map screen clicks relative to transformed canvas
+      const xOnViewport = e.clientX - rect.left
+      const yOnViewport = e.clientY - rect.top
+
+      // Apply zoom & pan transformations in reverse to get percentage coordinates (0-100)
+      const xInCanvasPixels = (xOnViewport - offset.x) / scale
+      const yInCanvasPixels = (yOnViewport - offset.y) / scale
+      const xPct = (xInCanvasPixels / dimensions.width) * 100
+      const yPct = (yInCanvasPixels / dimensions.height) * 100
+
+      if (markupTool === 'pin') {
+        setPendingMarkup({
+          type: 'pin',
+          x: xPct,
+          y: yPct,
+        })
+      } else if (markupTool === 'rect') {
+        setBoxStart({ x: xPct, y: yPct })
+        setBoxCurrent({ x: xPct, y: yPct })
+      } else if (markupTool === 'scribble') {
+        setDrawingPoints([{ x: xPct, y: yPct }])
+      }
+    }
+  }
+
+  const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (isPanning) {
+      setOffset({
+        x: e.clientX - panStart.x,
+        y: e.clientY - panStart.y,
+      })
+      return
+    }
+
+    if (addingIssue) {
+      const rect = e.currentTarget.getBoundingClientRect()
+      const xOnViewport = e.clientX - rect.left
+      const yOnViewport = e.clientY - rect.top
+      const xInCanvasPixels = (xOnViewport - offset.x) / scale
+      const yInCanvasPixels = (yOnViewport - offset.y) / scale
+      const xPct = (xInCanvasPixels / dimensions.width) * 100
+      const yPct = (yInCanvasPixels / dimensions.height) * 100
+
+      if (markupTool === 'rect' && boxStart) {
+        setBoxCurrent({ x: xPct, y: yPct })
+      } else if (markupTool === 'scribble' && drawingPoints.length > 0) {
+        setDrawingPoints(prev => [...prev, { x: xPct, y: yPct }])
+      }
+    }
+  }
+
+  const handleMouseUp = () => {
+    if (isPanning) {
+      setIsPanning(false)
+      return
+    }
+
+    if (addingIssue) {
+      if (markupTool === 'rect' && boxStart && boxCurrent) {
+        const x = Math.min(boxStart.x, boxCurrent.x)
+        const y = Math.min(boxStart.y, boxCurrent.y)
+        const w = Math.abs(boxStart.x - boxCurrent.x)
+        const h = Math.abs(boxStart.y - boxCurrent.y)
+        if (w > 0.5 && h > 0.5) {
+          setPendingMarkup({
+            type: 'rect',
+            x,
+            y,
+            w,
+            h,
+          })
+        }
+        setBoxStart(null)
+        setBoxCurrent(null)
+      } else if (markupTool === 'scribble' && drawingPoints.length > 1) {
+        setPendingMarkup({
+          type: 'scribble',
+          x: drawingPoints[0].x,
+          y: drawingPoints[0].y,
+          points: drawingPoints,
+        })
+        setDrawingPoints([])
+      }
+    }
   }
 
   async function saveIssue() {
-    if (!pendingPos || !newIssue.title || !drawing) return
+    if (!pendingMarkup || !newIssue.title || !drawing) return
+
+    // Serialize markup geometry inside the description field
+    const serializedDescription = JSON.stringify({
+      type: pendingMarkup.type,
+      x: pendingMarkup.x,
+      y: pendingMarkup.y,
+      w: pendingMarkup.w,
+      h: pendingMarkup.h,
+      points: pendingMarkup.points,
+      realDescription: newIssue.description,
+    })
+
     await createIssue({
       drawingId: drawing.id,
-      x: pendingPos.x,
-      y: pendingPos.y,
+      x: pendingMarkup.x,
+      y: pendingMarkup.y,
       pageNumber: 1,
       category: newIssue.category,
       title: newIssue.title,
-      description: newIssue.description,
+      description: serializedDescription,
       priority: newIssue.priority,
       createdBy: currentUser.id,
     })
+
     setNewIssue({ title: '', description: '', category: 'conflito_projeto', priority: 'alta' })
-    setPendingPos(null)
+    setPendingMarkup(null)
     setAddingIssue(false)
   }
 
@@ -253,6 +476,8 @@ export default function Revisao() {
     )
   }
 
+  const cursorStyle = spacePressed || isPanning ? 'grabbing' : addingIssue ? 'crosshair' : 'grab'
+
   return (
     <div className="h-full flex flex-col space-y-4">
       <DataSourceBadge usingMockData={usingMockData} />
@@ -270,13 +495,43 @@ export default function Revisao() {
           <div className="text-xs font-mono mt-0.5" style={{ color: 'var(--slate)' }}>{drawing?.code}</div>
         </div>
         <div className="flex items-center gap-2">
+          {/* Zoom controls */}
+          <div className="flex items-center gap-1 bg-surface-mid rounded-lg p-1 border border-surface-border mr-2">
+            <button
+              onClick={() => setScale(s => Math.max(s / 1.3, 0.25))}
+              className="p-1 hover:bg-white/10 rounded"
+              title="Zoom Out"
+              style={{ color: 'var(--slate)' }}
+            >
+              <ZoomOut size={14} />
+            </button>
+            <span className="text-[10px] font-mono px-1 w-12 text-center" style={{ color: 'var(--white)' }}>
+              {Math.round(scale * 100)}%
+            </span>
+            <button
+              onClick={() => setScale(s => Math.min(s * 1.3, 8))}
+              className="p-1 hover:bg-white/10 rounded"
+              title="Zoom In"
+              style={{ color: 'var(--slate)' }}
+            >
+              <ZoomIn size={14} />
+            </button>
+            <button
+              onClick={() => { setScale(1); setOffset({ x: 0, y: 0 }) }}
+              className="p-1 hover:bg-white/10 rounded text-[9px] font-semibold"
+              style={{ color: 'var(--slate)' }}
+            >
+              1:1
+            </button>
+          </div>
+
           <Button
             variant={addingIssue ? 'primary' : 'ghost'}
             size="sm"
-            onClick={() => { setAddingIssue(!addingIssue); setPendingPos(null) }}
+            onClick={() => { setAddingIssue(!addingIssue); setPendingMarkup(null) }}
           >
             <Plus size={14} />
-            {addingIssue ? 'Clique na prancha' : 'Adicionar Issue'}
+            {addingIssue ? 'Cancelar Anotação' : 'Anotar Desenho'}
           </Button>
           {drawing && (
             <>
@@ -355,24 +610,51 @@ export default function Revisao() {
         </Card>
       )}
 
+      {/* Adding issue toolbar instructions */}
+      {addingIssue && (
+        <Card className="p-2 flex items-center justify-between bg-orange-500/10 border-orange-500/30 flex-shrink-0">
+          <div className="text-xs font-semibold text-orange-400 flex items-center gap-2">
+            <Edit3 size={14} /> Modo Marcação Ativo: Escolha uma ferramenta à direita e clique/desenhe na prancha.
+          </div>
+          <div className="flex items-center gap-1.5">
+            {[
+              { type: 'pin', label: 'Ponto', icon: <MapPin size={12} /> },
+              { type: 'rect', label: 'Caixa Vermelha', icon: <Square size={12} /> },
+              { type: 'scribble', label: 'Desenho à Mão', icon: <Edit3 size={12} /> }
+            ].map(tool => (
+              <button
+                key={tool.type}
+                onClick={() => { setMarkupTool(tool.type as any); setPendingMarkup(null) }}
+                className="flex items-center gap-1 px-2.5 py-1 rounded text-xs transition-colors"
+                style={{
+                  background: markupTool === tool.type ? 'var(--orange)' : 'var(--surface-mid)',
+                  color: 'white',
+                }}
+              >
+                {tool.icon}
+                <span>{tool.label}</span>
+              </button>
+            ))}
+          </div>
+        </Card>
+      )}
+
       <div className="flex-1 flex gap-4 min-h-0">
-        {/* PDF canvas with issue pins */}
-        <div className="flex-1 flex flex-col gap-2">
-          {addingIssue && (
-            <div
-              className="text-xs text-center py-2 rounded-lg font-semibold"
-              style={{ background: 'rgba(249,115,22,0.15)', color: 'var(--orange)', border: '1px solid rgba(249,115,22,0.3)' }}
-            >
-              🖱 Clique na área da prancha para marcar a issue
-            </div>
-          )}
+        {/* PDF canvas with issues wrapper */}
+        <div className="flex-1 flex flex-col gap-2 relative">
           <div
-            className="flex-1 relative rounded-xl overflow-auto cursor-crosshair bg-white border flex items-center justify-center p-4"
+            ref={containerRef}
+            className="flex-1 relative rounded-xl overflow-hidden bg-[#0d1825] border select-none"
             style={{
               borderColor: addingIssue ? 'var(--orange)' : 'var(--surface-border)',
               minHeight: '450px',
+              cursor: cursorStyle,
             }}
-            onClick={handleCanvasClick}
+            onWheel={handleWheel}
+            onMouseDown={handleMouseDown}
+            onMouseMove={handleMouseMove}
+            onMouseUp={handleMouseUp}
+            onContextMenu={e => e.preventDefault()} // prevent right-click menu during panning
           >
             {renderingPdf && (
               <div className="absolute inset-0 bg-[#0d1825]/40 backdrop-blur-xs flex items-center justify-center z-30">
@@ -380,104 +662,194 @@ export default function Revisao() {
               </div>
             )}
 
-            {renderedPage ? (
-              <div
-                className="relative"
-                style={{
-                  width: `${renderedPage.canvas.width}px`,
-                  height: `${renderedPage.canvas.height}px`,
-                  maxWidth: '100%'
-                }}
-              >
-                {/* Real PDF Canvas */}
-                <CanvasView source={renderedPage.canvas} className="w-full h-full" />
+            {/* Transform Matrix Wrapper for Zoom & Pan */}
+            <div
+              className="absolute origin-top-left"
+              style={{
+                width: `${dimensions.width}px`,
+                height: `${dimensions.height}px`,
+                transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})`,
+                transition: isPanning ? 'none' : 'transform 0.08s ease-out',
+                pointerEvents: 'none', // mouse events handled by parent container
+              }}
+            >
+              {renderedPage ? (
+                <>
+                  {/* Real PDF Canvas */}
+                  <CanvasView source={renderedPage.canvas} className="w-full h-full shadow-2xl animate-fade-in" />
 
-                {/* Issue pins mapped on top of real canvas */}
-                {issues.map((issue, idx) => (
-                  <IssuePin
-                    key={issue.id}
-                    issue={issue}
-                    index={idx}
-                    selected={selectedIssue === issue.id}
-                    onClick={() => setSelectedIssue(selectedIssue === issue.id ? null : issue.id)}
-                  />
-                ))}
+                  {/* SVG Vector Overlays for Box/Scribble Markups (Layered on top of canvas) */}
+                  <svg className="absolute inset-0 w-full h-full pointer-events-none z-10">
+                    {/* Render saved markups from issues database */}
+                    {issues.map(issue => {
+                      const markup = parseIssueDescription(issue.description)
+                      const cat = CATEGORY_OPTIONS.find(c => c.value === issue.category)
+                      const color = cat?.color || '#EF4444'
 
-                {/* Pending position marker */}
-                {pendingPos && (
-                  <div
-                    className="absolute w-5 h-5 rounded-full border-2 border-white animate-pulse"
-                    style={{
-                      left: `${pendingPos.x}%`,
-                      top: `${pendingPos.y}%`,
-                      transform: 'translate(-50%,-50%)',
-                      background: 'var(--orange)',
-                    }}
-                  />
-                )}
-              </div>
-            ) : (
-              // Fallback simulated floor plan SVG when no PDF is uploaded or failed
-              <div className="relative w-full h-full max-w-[600px] aspect-[4/3] flex items-center justify-center">
-                <svg width="100%" height="100%" viewBox="0 0 400 300" style={{ position: 'absolute', inset: 0 }}>
-                  <defs>
-                    <pattern id="hatch" width="8" height="8" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
-                      <line x1="0" y1="0" x2="0" y2="8" stroke="#bbb" strokeWidth="1" />
-                    </pattern>
-                  </defs>
-                  <rect x="30" y="30" width="340" height="240" fill="none" stroke="#333" strokeWidth="2.5" />
-                  <rect x="40" y="40" width="118" height="118" fill="url(#hatch)" opacity="0.2" />
-                  <line x1="160" y1="30" x2="160" y2="200" stroke="#333" strokeWidth="1.5" />
-                  <line x1="30" y1="150" x2="160" y2="150" stroke="#333" strokeWidth="1.5" />
-                  <line x1="250" y1="30" x2="250" y2="160" stroke="#333" strokeWidth="1.5" />
-                  <line x1="160" y1="200" x2="370" y2="200" stroke="#333" strokeWidth="1.5" />
-                  <line x1="30" y1="15" x2="370" y2="15" stroke="#333" strokeWidth="0.5" />
-                  <text x="200" y="12" textAnchor="middle" fill="#333" fontSize="8">8.50m</text>
-                  <text x="90" y="95" textAnchor="middle" fill="#555" fontSize="11" fontWeight="500">SALA</text>
-                  <text x="90" y="178" textAnchor="middle" fill="#555" fontSize="11" fontWeight="500">QUARTO 01</text>
-                  <text x="205" y="90" textAnchor="middle" fill="#555" fontSize="11" fontWeight="500">COZINHA</text>
-                  <text x="310" y="90" textAnchor="middle" fill="#555" fontSize="11" fontWeight="500">VARANDA</text>
-                  <text x="265" y="228" textAnchor="middle" fill="#555" fontSize="11" fontWeight="500">QUARTO 02</text>
-                  <rect x="30" y="260" width="340" height="30" fill="none" stroke="#333" strokeWidth="0.5" />
-                  <text x="40" y="278" fill="#333" fontSize="7">{drawing?.title || 'Planta de Exemplo'}</text>
-                  <text x="350" y="278" textAnchor="end" fill="#333" fontSize="8" fontWeight="bold">{drawing?.revision || 'R00'}</text>
-                </svg>
+                      if (markup.type === 'rect' && markup.w && markup.h) {
+                        return (
+                          <rect
+                            key={issue.id}
+                            x={`${markup.x}%`}
+                            y={`${markup.y}%`}
+                            width={`${markup.w}%`}
+                            height={`${markup.h}%`}
+                            fill="none"
+                            stroke={color}
+                            strokeWidth="3.5"
+                            strokeDasharray="4 2"
+                          />
+                        )
+                      }
+                      if (markup.type === 'scribble' && markup.points) {
+                        const pathData = markup.points.map((p, i) =>
+                          `${i === 0 ? 'M' : 'L'} ${(p.x / 100) * dimensions.width} ${(p.y / 100) * dimensions.height}`
+                        ).join(' ')
+                        return (
+                          <path
+                            key={issue.id}
+                            d={pathData}
+                            fill="none"
+                            stroke={color}
+                            strokeWidth="4"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          />
+                        )
+                      }
+                      return null
+                    })}
 
-                {/* Issue pins mapped on top of SVG */}
-                {issues.map((issue, idx) => (
-                  <IssuePin
-                    key={issue.id}
-                    issue={issue}
-                    index={idx}
-                    selected={selectedIssue === issue.id}
-                    onClick={() => setSelectedIssue(selectedIssue === issue.id ? null : issue.id)}
-                  />
-                ))}
+                    {/* Render active drawing previews */}
+                    {addingIssue && markupTool === 'rect' && boxStart && boxCurrent && (
+                      <rect
+                        x={`${Math.min(boxStart.x, boxCurrent.x)}%`}
+                        y={`${Math.min(boxStart.y, boxCurrent.y)}%`}
+                        width={`${Math.abs(boxStart.x - boxCurrent.x)}%`}
+                        height={`${Math.abs(boxStart.y - boxCurrent.y)}%`}
+                        fill="rgba(239, 68, 68, 0.15)"
+                        stroke="#EF4444"
+                        strokeWidth="3"
+                        strokeDasharray="4 2"
+                      />
+                    )}
 
-                {/* Pending position marker */}
-                {pendingPos && (
-                  <div
-                    className="absolute w-5 h-5 rounded-full border-2 border-white animate-pulse"
-                    style={{
-                      left: `${pendingPos.x}%`,
-                      top: `${pendingPos.y}%`,
-                      transform: 'translate(-50%,-50%)',
-                      background: 'var(--orange)',
-                    }}
-                  />
-                )}
-              </div>
-            )}
+                    {addingIssue && markupTool === 'scribble' && drawingPoints.length > 1 && (
+                      <path
+                        d={drawingPoints.map((p, i) =>
+                          `${i === 0 ? 'M' : 'L'} ${(p.x / 100) * dimensions.width} ${(p.y / 100) * dimensions.height}`
+                        ).join(' ')}
+                        fill="none"
+                        stroke="#EF4444"
+                        strokeWidth="4"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                    )}
+                  </svg>
+
+                  {/* HTML Pin Overlay Wrapper */}
+                  <div className="absolute inset-0 pointer-events-none z-20">
+                    {/* Render saved issue pins */}
+                    {issues.map((issue, idx) => (
+                      <IssuePin
+                        key={issue.id}
+                        issue={issue}
+                        index={idx}
+                        selected={selectedIssue === issue.id}
+                        onClick={() => setSelectedIssue(selectedIssue === issue.id ? null : issue.id)}
+                      />
+                    ))}
+
+                    {/* Render active pending markup pin indicator */}
+                    {addingIssue && pendingMarkup && pendingMarkup.type === 'pin' && (
+                      <div
+                        className="absolute w-5.5 h-5.5 rounded-full border-2 border-white animate-pulse z-30"
+                        style={{
+                          left: `${pendingMarkup.x}%`,
+                          top: `${pendingMarkup.y}%`,
+                          transform: 'translate(-50%,-50%)',
+                          background: 'var(--orange)',
+                        }}
+                      />
+                    )}
+
+                    {/* Render active pending markup box indicator */}
+                    {addingIssue && pendingMarkup && pendingMarkup.type === 'rect' && (
+                      <div
+                        className="absolute w-5 h-5 rounded-full border-2 border-white flex items-center justify-center text-[10px] font-bold shadow-lg z-30"
+                        style={{
+                          left: `${pendingMarkup.x}%`,
+                          top: `${pendingMarkup.y}%`,
+                          transform: 'translate(-50%,-50%)',
+                          background: 'var(--orange)',
+                          color: 'white'
+                        }}
+                      >
+                        Nu
+                      </div>
+                    )}
+
+                    {/* Render active pending markup scribble indicator */}
+                    {addingIssue && pendingMarkup && pendingMarkup.type === 'scribble' && (
+                      <div
+                        className="absolute w-5 h-5 rounded-full border-2 border-white flex items-center justify-center text-[10px] font-bold shadow-lg z-30"
+                        style={{
+                          left: `${pendingMarkup.x}%`,
+                          top: `${pendingMarkup.y}%`,
+                          transform: 'translate(-50%,-50%)',
+                          background: 'var(--orange)',
+                          color: 'white'
+                        }}
+                      >
+                        Sc
+                      </div>
+                    )}
+                  </div>
+                </>
+              ) : (
+                // Fallback SVG display if no PDF exists
+                <div className="relative w-full h-full flex items-center justify-center bg-slate-900">
+                  <svg width="400" height="300" className="w-[500px] h-[375px]" viewBox="0 0 400 300">
+                    <defs>
+                      <pattern id="hatch" width="8" height="8" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+                        <line x1="0" y1="0" x2="0" y2="8" stroke="#334155" strokeWidth="1" />
+                      </pattern>
+                    </defs>
+                    <rect x="30" y="30" width="340" height="240" fill="none" stroke="#475569" strokeWidth="2.5" />
+                    <rect x="40" y="40" width="118" height="118" fill="url(#hatch)" opacity="0.4" />
+                    <line x1="160" y1="30" x2="160" y2="200" stroke="#475569" strokeWidth="1.5" />
+                    <line x1="30" y1="150" x2="160" y2="150" stroke="#475569" strokeWidth="1.5" />
+                    <line x1="250" y1="30" x2="250" y2="160" stroke="#475569" strokeWidth="1.5" />
+                    <line x1="160" y1="200" x2="370" y2="200" stroke="#475569" strokeWidth="1.5" />
+                    <line x1="30" y1="15" x2="370" y2="15" stroke="#475569" strokeWidth="0.5" />
+                    <text x="200" y="12" textAnchor="middle" fill="#94a3b8" fontSize="8">8.50m</text>
+                    <text x="90" y="95" textAnchor="middle" fill="#94a3b8" fontSize="11" fontWeight="500">SALA</text>
+                    <text x="90" y="178" textAnchor="middle" fill="#94a3b8" fontSize="11" fontWeight="500">QUARTO 01</text>
+                    <text x="205" y="90" textAnchor="middle" fill="#94a3b8" fontSize="11" fontWeight="500">COZINHA</text>
+                    <text x="310" y="90" textAnchor="middle" fill="#94a3b8" fontSize="11" fontWeight="500">VARANDA</text>
+                    <text x="265" y="228" textAnchor="middle" fill="#94a3b8" fontSize="11" fontWeight="500">QUARTO 02</text>
+                    <rect x="30" y="260" width="340" height="30" fill="none" stroke="#475569" strokeWidth="0.5" />
+                    <text x="40" y="278" fill="#94a3b8" fontSize="7">{drawing?.title || 'Planta de Exemplo'}</text>
+                    <text x="350" y="278" textAnchor="end" fill="#94a3b8" fontSize="8" fontWeight="bold">{drawing?.revision || 'R00'}</text>
+                  </svg>
+                </div>
+              )}
+            </div>
+          </div>
+          {/* Zoom controls tooltip helper */}
+          <div className="absolute bottom-2 left-2 pointer-events-none text-[9px]" style={{ color: 'var(--slate)' }}>
+            Dica: Segure <span className="text-white font-bold">Ctrl + Roda do Mouse</span> para Zoom. Clique e arraste para mover o desenho (Pan).
           </div>
         </div>
 
         {/* Right panel – issues list + form */}
-        <div className="w-72 flex-shrink-0 space-y-3 overflow-y-auto">
+        <div className="w-80 flex-shrink-0 space-y-3 overflow-y-auto pr-1">
           {/* Add issue form */}
-          {(addingIssue && pendingPos) && (
-            <Card className="p-3 space-y-2" style={{ border: '1px solid var(--orange)' }}>
-              <div className="text-xs font-semibold" style={{ color: 'var(--orange)' }}>
-                Nova Issue · {pendingPos.x.toFixed(0)}%, {pendingPos.y.toFixed(0)}%
+          {(addingIssue && pendingMarkup) && (
+            <Card className="p-3 space-y-2 border-2" style={{ borderColor: 'var(--orange)' }}>
+              <div className="text-xs font-bold" style={{ color: 'var(--orange)' }}>
+                Nova Issue · {pendingMarkup.type === 'rect' ? 'Caixa demarcada' : pendingMarkup.type === 'scribble' ? 'Desenho livre' : 'Ponto marcado'}
               </div>
               <input
                 type="text"
@@ -488,8 +860,8 @@ export default function Revisao() {
                 style={{ background: 'var(--surface-mid)', border: '1px solid var(--surface-border)', color: 'var(--white)' }}
               />
               <textarea
-                placeholder="Descrição..."
-                rows={2}
+                placeholder="Descrição das alterações solicitadas..."
+                rows={3}
                 value={newIssue.description}
                 onChange={e => setNewIssue(prev => ({ ...prev, description: e.target.value }))}
                 className="w-full text-sm rounded px-2 py-1.5 outline-none resize-none"
@@ -513,10 +885,39 @@ export default function Revisao() {
                 <option value="media">Média prioridade</option>
                 <option value="baixa">Baixa prioridade</option>
               </select>
-              <div className="flex gap-2">
-                <Button variant="ghost" size="sm" onClick={() => { setAddingIssue(false); setPendingPos(null) }}>Cancelar</Button>
-                <Button size="sm" onClick={saveIssue} disabled={!newIssue.title}>Salvar</Button>
+              <div className="flex gap-2 pt-1">
+                <Button variant="ghost" size="sm" onClick={() => { setPendingMarkup(null); setDrawingPoints([]) }} className="flex-1">
+                  Refazer
+                </Button>
+                <Button size="sm" onClick={saveIssue} disabled={!newIssue.title} className="flex-1">
+                  Salvar Issue
+                </Button>
               </div>
+            </Card>
+          )}
+
+          {/* Selected issue detail view */}
+          {selectedIssueData && (
+            <Card className="p-3 space-y-2" style={{ border: '1px solid var(--navy-light)' }}>
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-bold uppercase text-slate-400">Issue Selecionada</span>
+                <button onClick={() => setSelectedIssue(null)} className="text-xs text-slate-500 hover:underline">Fechar</button>
+              </div>
+              <h4 className="text-sm font-bold text-white leading-tight">{selectedIssueData.title}</h4>
+              <div className="flex gap-1.5 flex-wrap pt-0.5">
+                <IssueCategoryBadge category={selectedIssueData.category} />
+                <span className="text-[9px] px-1.5 py-0.5 rounded uppercase font-bold"
+                  style={{
+                    color: selectedIssueData.priority === 'alta' ? '#EF4444' : selectedIssueData.priority === 'media' ? '#EAB308' : '#3B82F6',
+                    background: selectedIssueData.priority === 'alta' ? '#EF444422' : selectedIssueData.priority === 'media' ? '#EAB30822' : '#3B82F622'
+                  }}
+                >
+                  {selectedIssueData.priority}
+                </span>
+              </div>
+              <p className="text-xs text-slate-300 bg-surface-mid p-2 rounded whitespace-pre-line border border-surface-border">
+                {parseIssueDescription(selectedIssueData.description).realDescription || 'Sem descrição.'}
+              </p>
             </Card>
           )}
 
@@ -527,13 +928,14 @@ export default function Revisao() {
                 <MessageSquare size={12} className="inline mr-1" />
                 {issues.length} Issues
               </span>
-              <span className="text-xs" style={{ color: '#EF4444' }}>
+              <span className="text-xs animate-pulse" style={{ color: '#EF4444' }}>
                 {issues.filter(i => i.status === 'aberto').length} abertas
               </span>
             </div>
             <div className="space-y-2">
               {issues.map((issue, idx) => {
                 const cat = CATEGORY_OPTIONS.find(c => c.value === issue.category)
+                const markup = parseIssueDescription(issue.description)
                 return (
                   <div
                     key={issue.id}
@@ -557,28 +959,13 @@ export default function Revisao() {
                         </div>
                         <div className="flex items-center gap-1.5 mt-1 flex-wrap">
                           <IssueCategoryBadge category={issue.category} />
-                          <span
-                            className="text-xs px-1.5 py-0.5 rounded"
-                            style={{
-                              color: issue.status === 'resolvido' ? '#22C55E'
-                                : issue.status === 'em_revisao' ? '#EAB308' : '#EF4444',
-                              background: issue.status === 'resolvido' ? '#22C55E22'
-                                : issue.status === 'em_revisao' ? '#EAB30822' : '#EF444422',
-                            }}
-                          >
-                            {issue.status === 'aberto' ? 'Aberto'
-                              : issue.status === 'em_revisao' ? 'Em revisão'
-                              : 'Resolvido'}
+                          <span className="text-[10px] text-slate-500 font-mono italic">
+                            {markup.type === 'rect' ? 'Caixa' : markup.type === 'scribble' ? 'Desenho' : 'Ponto'}
                           </span>
                         </div>
-                        {issue.description && (
+                        {markup.realDescription && (
                           <div className="text-xs mt-1.5 line-clamp-2" style={{ color: 'var(--slate)' }}>
-                            {issue.description}
-                          </div>
-                        )}
-                        {issue.assignedTo && (
-                          <div className="text-xs mt-1" style={{ color: 'var(--slate)' }}>
-                            → {issue.assignedTo}
+                            {markup.realDescription}
                           </div>
                         )}
                       </div>
