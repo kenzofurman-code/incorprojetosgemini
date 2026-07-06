@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { ArrowLeft, ChevronLeft, ChevronRight, GitCompare, Info, Loader2 } from 'lucide-react'
+import { ArrowLeft, ChevronLeft, ChevronRight, GitCompare, Info, Loader2, ZoomIn, ZoomOut } from 'lucide-react'
 import { Card, Button } from '../../components/ui'
 import { useDrawings } from '../../hooks/useDrawings'
 import { useApp } from '../../context/AppContext'
@@ -44,36 +44,122 @@ export default function Comparar() {
   const [revRight, setRevRight] = useState(latestRev)
   const [page, setPage] = useState(1)
 
+  // PDF rendering state
+  const [leftPage, setLeftPage] = useState<RenderedPdfPage | null>(null)
+  const [rightPage, setRightPage] = useState<RenderedPdfPage | null>(null)
+  const [rendering, setRendering] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
   // Three-panel slider
   const [sliderPos, setSliderPos] = useState(33)
   const [sliderPos2, setSliderPos2] = useState(66)
   const [dragging, setDragging] = useState<'left' | 'right' | null>(null)
   const containerRef = useRef<HTMLDivElement>(null)
+  const viewportRef = useRef<HTMLDivElement>(null)
+
+  // Zoom & Pan states
+  const [scale, setScale] = useState(1)
+  const [offset, setOffset] = useState({ x: 0, y: 0 })
+  const [isPanning, setIsPanning] = useState(false)
+  const [panStart, setPanStart] = useState({ x: 0, y: 0 })
+  const [spacePressed, setSpacePressed] = useState(false)
+
+  // Keyboard listener for Spacebar pan
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.code === 'Space') {
+        setSpacePressed(true)
+        e.preventDefault()
+      }
+    }
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.code === 'Space') {
+        setSpacePressed(false)
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    window.addEventListener('keyup', handleKeyUp)
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown)
+      window.removeEventListener('keyup', handleKeyUp)
+    }
+  }, [])
+
+  // Prevent browser window zoom on Ctrl + Wheel inside the viewport
+  useEffect(() => {
+    const viewport = viewportRef.current
+    if (!viewport) return
+    const handleWheelPrevent = (e: WheelEvent) => {
+      if (e.ctrlKey) e.preventDefault()
+    }
+    viewport.addEventListener('wheel', handleWheelPrevent, { passive: false })
+    return () => {
+      viewport.removeEventListener('wheel', handleWheelPrevent)
+    }
+  }, [leftPage])
+
+  const handleWheel = (e: React.WheelEvent) => {
+    if (e.ctrlKey) {
+      e.preventDefault()
+      const zoomFactor = 1.15
+      const nextScale = e.deltaY < 0 ? scale * zoomFactor : scale / zoomFactor
+      const clampedScale = Math.min(Math.max(nextScale, 0.25), 8)
+
+      // Zoom towards mouse position
+      const rect = e.currentTarget.getBoundingClientRect()
+      const mouseX = e.clientX - rect.left
+      const mouseY = e.clientY - rect.top
+
+      const dx = mouseX - offset.x
+      const dy = mouseY - offset.y
+
+      setOffset({
+        x: mouseX - dx * (clampedScale / scale),
+        y: mouseY - dy * (clampedScale / scale),
+      })
+      setScale(clampedScale)
+    }
+  }
+
+  const handleMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+    const isMiddleButton = e.button === 1
+    const isRightButton = e.button === 2
+    const forcePan = spacePressed || isMiddleButton || isRightButton || e.button === 0 // default left drag to pan too!
+
+    if (forcePan) {
+      setIsPanning(true)
+      setPanStart({ x: e.clientX - offset.x, y: e.clientY - offset.y })
+      e.preventDefault()
+    }
+  }
 
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
-    if (!dragging || !containerRef.current) return
-    const rect = containerRef.current.getBoundingClientRect()
-    const pct = ((e.clientX - rect.left) / rect.width) * 100
-    if (dragging === 'left') {
-      setSliderPos(Math.max(10, Math.min(pct, sliderPos2 - 10)))
-    } else {
-      setSliderPos2(Math.max(sliderPos + 10, Math.min(pct, 90)))
+    if (dragging && containerRef.current) {
+      const rect = containerRef.current.getBoundingClientRect()
+      const pct = ((e.clientX - rect.left) / rect.width) * 100
+      if (dragging === 'left') {
+        setSliderPos(Math.max(10, Math.min(pct, sliderPos2 - 10)))
+      } else {
+        setSliderPos2(Math.max(sliderPos + 10, Math.min(pct, 90)))
+      }
+    } else if (isPanning) {
+      setOffset({
+        x: e.clientX - panStart.x,
+        y: e.clientY - panStart.y,
+      })
     }
-  }, [dragging, sliderPos, sliderPos2])
+  }, [dragging, isPanning, panStart, sliderPos, sliderPos2])
 
-  const stopDrag = useCallback(() => setDragging(null), [])
+  const stopDrag = useCallback(() => {
+    setDragging(null)
+    setIsPanning(false)
+  }, [])
 
   // Resolve PDF URLs from version list
   const leftVersion  = versions.find(v => v.revision === revLeft)
   const rightVersion = versions.find(v => v.revision === revRight)
   const leftUrl  = leftVersion?.pdfUrl  || drawing.pdfUrl || null
   const rightUrl = rightVersion?.pdfUrl || drawing.pdfUrl || null
-
-  // PDF rendering state
-  const [leftPage, setLeftPage] = useState<RenderedPdfPage | null>(null)
-  const [rightPage, setRightPage] = useState<RenderedPdfPage | null>(null)
-  const [rendering, setRendering] = useState(false)
-  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     if (!leftUrl || !rightUrl) return
@@ -242,7 +328,19 @@ export default function Comparar() {
       )}
 
       {/* Three-panel comparison viewer with unified stacked scroll */}
-      <div className="flex-1 min-h-[450px] relative rounded-xl border overflow-auto bg-white" style={{ borderColor: 'var(--surface-border)' }}>
+      <div
+        ref={viewportRef}
+        className={`flex-1 min-h-[450px] relative rounded-xl border overflow-hidden select-none bg-[#0d1825] ${
+          isPanning ? 'cursor-grabbing' : 'cursor-grab'
+        }`}
+        style={{ borderColor: 'var(--surface-border)' }}
+        onMouseDown={handleMouseDown}
+        onMouseMove={handleMouseMove}
+        onMouseUp={stopDrag}
+        onMouseLeave={stopDrag}
+        onWheel={handleWheel}
+        onContextMenu={(e) => e.preventDefault()}
+      >
         {rendering && (
           <div className="absolute inset-0 bg-[#0d1825]/40 backdrop-blur-xs flex items-center justify-center z-30">
             <Loader2 className="animate-spin text-orange-500" size={32} />
@@ -252,15 +350,13 @@ export default function Comparar() {
         {leftPage && rightPage && (
           <div
             ref={containerRef}
-            className="relative select-none mx-auto"
+            className="absolute origin-top-left select-none"
             style={{
               width: `${leftPage.canvas.width}px`,
               height: `${leftPage.canvas.height}px`,
-              maxWidth: '100%'
+              transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})`,
+              transition: isPanning ? 'none' : 'transform 0.08s ease-out',
             }}
-            onMouseMove={handleMouseMove}
-            onMouseUp={stopDrag}
-            onMouseLeave={stopDrag}
           >
             {/* Panel 1 (Bottom): older revision */}
             <div className="absolute inset-0 z-0">
@@ -287,9 +383,12 @@ export default function Comparar() {
             <div
               className="absolute inset-y-0 z-20 flex items-center justify-center cursor-ew-resize"
               style={{ left: `${sliderPos}%`, width: '4px', background: '#3B82F6' }}
-              onMouseDown={() => setDragging('left')}
+              onMouseDown={(e) => {
+                e.stopPropagation()
+                setDragging('left')
+              }}
             >
-              <div className="absolute w-6 h-6 rounded-full flex items-center justify-center shadow-md" style={{ background: '#3B82F6', color: 'white' }}>
+              <div className="absolute w-6 h-6 rounded-full flex items-center justify-center shadow-md animate-fade-in" style={{ background: '#3B82F6', color: 'white' }}>
                 <ChevronLeft size={14} className="-mr-1" />
                 <ChevronRight size={14} />
               </div>
@@ -299,9 +398,12 @@ export default function Comparar() {
             <div
               className="absolute inset-y-0 z-20 flex items-center justify-center cursor-ew-resize"
               style={{ left: `${sliderPos2}%`, width: '4px', background: '#22C55E' }}
-              onMouseDown={() => setDragging('right')}
+              onMouseDown={(e) => {
+                e.stopPropagation()
+                setDragging('right')
+              }}
             >
-              <div className="absolute w-6 h-6 rounded-full flex items-center justify-center shadow-md" style={{ background: '#22C55E', color: 'white' }}>
+              <div className="absolute w-6 h-6 rounded-full flex items-center justify-center shadow-md animate-fade-in" style={{ background: '#22C55E', color: 'white' }}>
                 <ChevronLeft size={14} className="-mr-1" />
                 <ChevronRight size={14} />
               </div>
@@ -324,6 +426,38 @@ export default function Comparar() {
               style={{ background: 'rgba(34,197,94,0.85)', color: 'white' }}>
               Versão {revRight}
             </div>
+          </div>
+        )}
+
+        {/* Floating Zoom controls inside the viewport */}
+        {leftPage && rightPage && (
+          <div className="absolute bottom-4 right-4 z-20 flex items-center gap-1 bg-surface-mid rounded-lg p-1 border border-surface-border">
+            <button
+              onClick={() => setScale(s => Math.max(s / 1.3, 0.25))}
+              className="p-1 hover:bg-white/10 rounded"
+              title="Zoom Out"
+              style={{ color: 'var(--slate)' }}
+            >
+              <ZoomOut size={14} />
+            </button>
+            <span className="text-[10px] font-mono px-1 w-12 text-center" style={{ color: 'var(--white)' }}>
+              {Math.round(scale * 100)}%
+            </span>
+            <button
+              onClick={() => setScale(s => Math.min(s * 1.3, 8))}
+              className="p-1 hover:bg-white/10 rounded"
+              title="Zoom In"
+              style={{ color: 'var(--slate)' }}
+            >
+              <ZoomIn size={14} />
+            </button>
+            <button
+              onClick={() => { setScale(1); setOffset({ x: 0, y: 0 }) }}
+              className="p-1 hover:bg-white/10 rounded text-[9px] font-semibold"
+              style={{ color: 'var(--slate)' }}
+            >
+              1:1
+            </button>
           </div>
         )}
       </div>
