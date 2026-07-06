@@ -67,6 +67,9 @@ export interface DbDrawing {
   updated_at: string
   approved_at: string | null
   approved_by: string | null
+  qr_code_x?: number | null
+  qr_code_y?: number | null
+  qr_code_page?: number | null
   created_at: string
 }
 

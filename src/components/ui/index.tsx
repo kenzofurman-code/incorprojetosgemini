@@ -237,3 +237,4 @@ export { default as PdfViewer } from './PdfViewer'
 // ── QR components re-export ───────────────────────────────────────────────────
 export { default as QrScanner } from './QrScanner'
 export { default as DrawingQrCode } from './DrawingQrCode'
+export { default as QrCodePlacer } from './QrCodePlacer'

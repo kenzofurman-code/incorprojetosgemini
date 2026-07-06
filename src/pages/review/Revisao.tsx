@@ -12,6 +12,7 @@ import { useDrawings } from '../../hooks/useDrawings'
 import { useApp } from '../../context/AppContext'
 import type { Issue, IssueCategory } from '../../types'
 import { renderPdfPage, type RenderedPdfPage } from '../../lib/pdf-comparison'
+import QRCode from 'qrcode'
 
 const CATEGORY_OPTIONS: { value: IssueCategory; label: string; color: string }[] = [
   { value: 'conflito_projeto',  label: 'Conflito de Projeto',  color: '#EF4444' },
@@ -114,6 +115,24 @@ function CanvasView({ source, className = '', style }: CanvasViewProps) {
 
   if (!source) return null
   return <canvas className={`block ${className}`} ref={ref} style={style} />
+}
+
+function PositionedQrCode({ code }: { code: string }) {
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+
+  useEffect(() => {
+    if (!canvasRef.current || !code) return
+    QRCode.toCanvas(canvasRef.current, code, {
+      width: 41, // fits 45px wrapper with padding
+      margin: 0,
+      color: {
+        dark: '#000000',
+        light: '#ffffff',
+      },
+    }).catch(err => console.error('[PositionedQrCode] Error generating QR:', err))
+  }, [code])
+
+  return <canvas ref={canvasRef} style={{ display: 'block', width: '100%', height: '100%' }} />
 }
 
 export default function Revisao({ viewOnly = false }: { viewOnly?: boolean }) {
@@ -683,6 +702,24 @@ export default function Revisao({ viewOnly = false }: { viewOnly?: boolean }) {
                 <>
                   {/* Real PDF Canvas */}
                   <CanvasView source={renderedPage.canvas} className="w-full h-full shadow-2xl animate-fade-in" />
+
+                  {/* Positioned QR Code on the Title Block / Carimbo */}
+                  {drawing?.qrCodeX != null && drawing?.qrCodeY != null && (
+                    <div
+                      className="absolute p-0.5 rounded bg-white shadow-lg z-10 pointer-events-auto border border-orange-500/20"
+                      style={{
+                        left: `${drawing.qrCodeX}%`,
+                        top: `${drawing.qrCodeY}%`,
+                        transform: 'translate(-50%, -50%)',
+                        width: '45px',
+                        height: '45px',
+                        background: '#ffffff',
+                      }}
+                      title={`QR Code da prancha: ${drawing.code}`}
+                    >
+                      <PositionedQrCode code={drawing.code} />
+                    </div>
+                  )}
 
                   {/* SVG Vector Overlays for Box/Scribble Markups (Layered on top of canvas) */}
                   <svg className="absolute inset-0 w-full h-full pointer-events-none z-10">

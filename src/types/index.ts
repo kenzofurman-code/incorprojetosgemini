@@ -54,6 +54,9 @@ export interface Drawing {
   approvedBy?: string
   isOriginal: boolean
   qrCodeData?: string
+  qrCodeX?: number
+  qrCodeY?: number
+  qrCodePage?: number
   plotCount?: number
   versions?: DrawingVersion[]
 }

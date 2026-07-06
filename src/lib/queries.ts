@@ -26,6 +26,9 @@ function mapDrawing(row: DbDrawing, versions: DbDrawingVersion[] = []): Drawing 
     approvedBy: row.approved_by || undefined,
     isOriginal: row.is_original,
     qrCodeData: row.qr_code_data || undefined,
+    qrCodeX: row.qr_code_x != null ? Number(row.qr_code_x) : undefined,
+    qrCodeY: row.qr_code_y != null ? Number(row.qr_code_y) : undefined,
+    qrCodePage: row.qr_code_page != null ? Number(row.qr_code_page) : undefined,
     versions: versions.map(mapVersion),
   }
 }
@@ -194,6 +197,20 @@ export async function updateDrawingStatus(
       .update({ status, approved_at: updates.approved_at as string | undefined })
       .eq('drawing_id', id)
   }
+}
+
+export async function updateDrawingQrCodePosition(id: string, x: number, y: number, page: number) {
+  const { error } = await supabase
+    .from('drawings')
+    .update({
+      qr_code_x: x,
+      qr_code_y: y,
+      qr_code_page: page,
+      updated_at: new Date().toISOString()
+    })
+    .eq('id', id)
+
+  if (error) throw error
 }
 
 // ─── MILESTONES (Cronograma) ───────────────────────────────────────────────

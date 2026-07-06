@@ -4,7 +4,7 @@ import {
   Upload, Search, Eye, GitCompare, Layers,
   FileCheck, ChevronDown, ChevronRight, QrCode, History, Loader2, AlertCircle
 } from 'lucide-react'
-import { Card, PageHeader, StatusBadge, Button, DataSourceBadge } from '../../components/ui'
+import { Card, PageHeader, StatusBadge, Button, DataSourceBadge, QrCodePlacer } from '../../components/ui'
 import { DISCIPLINES, DISCIPLINE_MAP } from '../../data/mockData'
 import { useDrawings } from '../../hooks/useDrawings'
 import { useApp } from '../../context/AppContext'
@@ -214,6 +214,7 @@ function UploadPanel({ projectId, onClose, onUploaded }: {
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState(false)
+  const [uploadedDrawing, setUploadedDrawing] = useState<Drawing | null>(null)
 
   const generatedCode = disciplineCode && floorCode
     ? `043-EP-${disciplineCode}-${floorCode}-${docType}-${number}-${revision}`
@@ -227,7 +228,7 @@ function UploadPanel({ projectId, onClose, onUploaded }: {
     setSubmitting(true)
     setError(null)
     try {
-      await upload({
+      const newDrawing = await upload({
         projectId,
         file,
         code: generatedCode,
@@ -241,20 +242,29 @@ function UploadPanel({ projectId, onClose, onUploaded }: {
         designerName: currentUser.name,
         designerId: currentUser.id,
       })
-      setSuccess(true)
-      setTimeout(() => {
-        onUploaded()
-        onClose()
-      }, 1000)
+      setUploadedDrawing(newDrawing)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Erro ao enviar prancha.')
-    } finally {
       setSubmitting(false)
     }
   }
 
+  function handleQrSaved() {
+    setSuccess(true)
+    setTimeout(() => {
+      onUploaded()
+      onClose()
+    }, 1000)
+  }
+
+  function handleQrClose() {
+    onUploaded()
+    onClose()
+  }
+
   return (
-    <Card className="p-5">
+    <>
+      <Card className="p-5">
       <div className="text-sm font-semibold mb-4" style={{ color: 'var(--white)' }}>
         Upload de Prancha
       </div>
@@ -386,6 +396,14 @@ function UploadPanel({ projectId, onClose, onUploaded }: {
         </Button>
       </div>
     </Card>
+    {uploadedDrawing && (
+      <QrCodePlacer
+        drawing={uploadedDrawing}
+        onSaved={handleQrSaved}
+        onClose={handleQrClose}
+      />
+    )}
+    </>
   )
 }
 
