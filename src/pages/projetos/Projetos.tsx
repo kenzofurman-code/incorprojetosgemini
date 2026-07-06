@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Upload, Search, Eye, GitCompare, Layers,
-  FileCheck, ChevronDown, ChevronRight, QrCode, History, Loader2, AlertCircle
+  FileCheck, ChevronDown, ChevronRight, QrCode, History, Loader2, AlertCircle, Ruler
 } from 'lucide-react'
 import { Card, PageHeader, StatusBadge, Button, DataSourceBadge, QrCodePlacer } from '../../components/ui'
 import { DISCIPLINES, DISCIPLINE_MAP } from '../../data/mockData'
@@ -27,7 +27,7 @@ function VersionPill({ revision, active }: { revision: string; active?: boolean 
 
 function DrawingRow({ drawing, onAction }: {
   drawing: Drawing
-  onAction: (action: 'compare' | 'overlay' | 'review' | 'view', id: string) => void
+  onAction: (action: 'compare' | 'overlay' | 'review' | 'view' | 'quantify', id: string) => void
 }) {
   const [expanded, setExpanded] = useState(false)
   const disc = DISCIPLINE_MAP[drawing.disciplineCode]
@@ -118,6 +118,14 @@ function DrawingRow({ drawing, onAction }: {
               title="Revisar / Aprovar"
             >
               <FileCheck size={14} />
+            </button>
+            <button
+              onClick={() => onAction('quantify', drawing.id)}
+              className="p-1.5 rounded hover:bg-white/10 transition-colors"
+              style={{ color: 'var(--slate)' }}
+              title="Quantificar desenho"
+            >
+              <Ruler size={14} />
             </button>
           </div>
         </td>
@@ -431,11 +439,12 @@ export default function Projetos() {
     return true
   })
 
-  function handleAction(action: 'compare' | 'overlay' | 'review' | 'view', id: string) {
+  function handleAction(action: 'compare' | 'overlay' | 'review' | 'view' | 'quantify', id: string) {
     if (action === 'compare') navigate(`/projetos/${id}/comparar`)
     if (action === 'overlay') navigate(`/projetos/${id}/sobrepor`)
     if (action === 'review') navigate(`/projetos/${id}/revisao`)
     if (action === 'view') navigate(`/projetos/${id}/visualizar`)
+    if (action === 'quantify') navigate(`/projetos/${id}/quantificacao`)
   }
 
   return (
