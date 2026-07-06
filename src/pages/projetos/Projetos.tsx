@@ -417,7 +417,7 @@ export default function Projetos() {
     if (action === 'compare') navigate(`/projetos/${id}/comparar`)
     if (action === 'overlay') navigate(`/projetos/${id}/sobrepor`)
     if (action === 'review') navigate(`/projetos/${id}/revisao`)
-    if (action === 'view') navigate(`/projetos/${id}/comparar`)
+    if (action === 'view') navigate(`/projetos/${id}/visualizar`)
   }
 
   return (

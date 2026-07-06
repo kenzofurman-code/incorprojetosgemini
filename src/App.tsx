@@ -84,6 +84,7 @@ export default function App() {
             <Route path="projetos/:id/comparar"        element={<Comparar />} />
             <Route path="projetos/:id/sobrepor"        element={<Sobrepor />} />
             <Route path="projetos/:id/revisao"         element={<Revisao />} />
+            <Route path="projetos/:id/visualizar"      element={<Revisao viewOnly={true} />} />
             <Route path="revisao"                      element={<Revisao />} />
             <Route path="bim"                          element={<BIMPage />} />
             <Route path="cad"                          element={<CADPage />} />

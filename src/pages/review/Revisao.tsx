@@ -116,7 +116,7 @@ function CanvasView({ source, className = '', style }: CanvasViewProps) {
   return <canvas className={`block ${className}`} ref={ref} style={style} />
 }
 
-export default function Revisao() {
+export default function Revisao({ viewOnly = false }: { viewOnly?: boolean }) {
   const { id } = useParams()
   const navigate = useNavigate()
   const { currentUser, currentProject } = useApp()
@@ -483,13 +483,15 @@ export default function Revisao() {
       <DataSourceBadge usingMockData={usingMockData} />
       {/* Header */}
       <div className="flex items-center gap-3 flex-shrink-0">
-        <button onClick={() => navigate('/revisao')} className="p-1.5 rounded-lg hover:bg-white/10 transition-colors" style={{ color: 'var(--slate)' }}>
+        <button onClick={() => navigate(viewOnly ? '/projetos' : '/revisao')} className="p-1.5 rounded-lg hover:bg-white/10 transition-colors" style={{ color: 'var(--slate)' }}>
           <ArrowLeft size={18} />
         </button>
         <div className="flex-1">
           <div className="flex items-center gap-2">
             <FileCheck size={16} style={{ color: 'var(--orange)' }} />
-            <span className="text-sm font-semibold" style={{ color: 'var(--white)' }}>Revisão & Aprovação</span>
+            <span className="text-sm font-semibold" style={{ color: 'var(--white)' }}>
+              {viewOnly ? 'Visualização da Prancha' : 'Revisão & Aprovação'}
+            </span>
             {drawing && <StatusBadge status={drawing.status} />}
           </div>
           <div className="text-xs font-mono mt-0.5" style={{ color: 'var(--slate)' }}>{drawing?.code}</div>
@@ -525,22 +527,26 @@ export default function Revisao() {
             </button>
           </div>
 
-          <Button
-            variant={addingIssue ? 'primary' : 'ghost'}
-            size="sm"
-            onClick={() => { setAddingIssue(!addingIssue); setPendingMarkup(null) }}
-          >
-            <Plus size={14} />
-            {addingIssue ? 'Cancelar Anotação' : 'Anotar Desenho'}
-          </Button>
+          {!viewOnly && (
+            <Button
+              variant={addingIssue ? 'primary' : 'ghost'}
+              size="sm"
+              onClick={() => { setAddingIssue(!addingIssue); setPendingMarkup(null) }}
+            >
+              <Plus size={14} />
+              {addingIssue ? 'Cancelar Anotação' : 'Anotar Desenho'}
+            </Button>
+          )}
           {drawing && (
             <>
               <Button variant="ghost" size="sm" onClick={() => setShowQrCode(!showQrCode)}>
                 QR Code
               </Button>
-              <Button size="sm" onClick={() => setShowDecisionPanel(!showDecisionPanel)}>
-                <FileCheck size={14} /> Aprovar / Rejeitar
-              </Button>
+              {!viewOnly && (
+                <Button size="sm" onClick={() => setShowDecisionPanel(!showDecisionPanel)}>
+                  <FileCheck size={14} /> Aprovar / Rejeitar
+                </Button>
+              )}
             </>
           )}
         </div>
