@@ -59,6 +59,7 @@ export default function Comparar() {
 
   // Zoom & Pan states
   const [scale, setScale] = useState(1)
+  const [renderedScale, setRenderedScale] = useState(1)
   const [offset, setOffset] = useState({ x: 0, y: 0 })
   const [isPanning, setIsPanning] = useState(false)
   const [panStart, setPanStart] = useState({ x: 0, y: 0 })
@@ -161,15 +162,48 @@ export default function Comparar() {
   const leftUrl  = leftVersion?.pdfUrl  || drawing.pdfUrl || null
   const rightUrl = rightVersion?.pdfUrl || drawing.pdfUrl || null
 
+  // Debounce scale updates to avoid lagging during zoom wheel
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setRenderedScale(scale)
+    }, 250)
+    return () => clearTimeout(timer)
+  }, [scale])
+
+  // Fit to screen on initial load
+  useEffect(() => {
+    if (!leftPage || !viewportRef.current) return
+    const viewport = viewportRef.current
+    const containerWidth = viewport.clientWidth
+    const containerHeight = viewport.clientHeight
+    const pageWidth = leftPage.canvas.width / renderedScale
+    const pageHeight = leftPage.canvas.height / renderedScale
+
+    if (containerWidth > 0 && containerHeight > 0) {
+      const scaleX = containerWidth / pageWidth
+      const scaleY = containerHeight / pageHeight
+      const newScale = Math.min(scaleX, scaleY) * 0.95
+      const newOffsetX = (containerWidth - pageWidth * newScale) / 2
+      const newOffsetY = (containerHeight - pageHeight * newScale) / 2
+
+      setScale(newScale)
+      setRenderedScale(newScale)
+      setOffset({ x: newOffsetX, y: newOffsetY })
+    }
+  }, [leftUrl, page]) // Fit screen when new drawing or page is loaded
+
   useEffect(() => {
     if (!leftUrl || !rightUrl) return
     let cancelled = false
     setRendering(true)
     setError(null)
 
+    // Render left and right page canvases at the high resolution scale
+    const targetScale = 2.5 * renderedScale
+
     Promise.all([
-      renderPdfPage(leftUrl, page, false),
-      renderPdfPage(rightUrl, page, false)
+      renderPdfPage(leftUrl, page, false, targetScale),
+      renderPdfPage(rightUrl, page, false, targetScale)
     ])
       .then(([left, right]) => {
         if (!cancelled) {
@@ -190,7 +224,7 @@ export default function Comparar() {
     return () => {
       cancelled = true
     }
-  }, [leftUrl, rightUrl, page])
+  }, [leftUrl, rightUrl, page, renderedScale])
 
   // Generate difference canvas dynamically
   const diffCanvas = useMemo(() => {
@@ -352,8 +386,8 @@ export default function Comparar() {
             ref={containerRef}
             className="absolute origin-top-left select-none"
             style={{
-              width: `${leftPage.canvas.width}px`,
-              height: `${leftPage.canvas.height}px`,
+              width: `${leftPage.canvas.width / renderedScale}px`,
+              height: `${leftPage.canvas.height / renderedScale}px`,
               transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})`,
               transition: isPanning ? 'none' : 'transform 0.08s ease-out',
             }}

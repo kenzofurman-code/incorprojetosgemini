@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { ArrowLeft, Layers, Plus, Eye, EyeOff, Move, Palette, Loader2, ArrowUp, ArrowDown, Check, X, RotateCcw } from 'lucide-react'
+import { ArrowLeft, Layers, Plus, Eye, EyeOff, Move, Palette, Loader2, ArrowUp, ArrowDown, Check, X, RotateCcw, ZoomIn, ZoomOut } from 'lucide-react'
 import { Card, Button } from '../../components/ui'
 import { useDrawings } from '../../hooks/useDrawings'
 import { useApp } from '../../context/AppContext'
@@ -220,23 +220,130 @@ export default function Sobrepor() {
     ? { width: firstRendered.width, height: firstRendered.height }
     : { width: 800, height: 600 }
 
+  // Zoom & Pan states
+  const [scale, setScale] = useState(1)
+  const [offset, setOffset] = useState({ x: 0, y: 0 })
+  const [isPanning, setIsPanning] = useState(false)
+  const [panStart, setPanStart] = useState({ x: 0, y: 0 })
+  const [spacePressed, setSpacePressed] = useState(false)
+  const viewportRef = useRef<HTMLDivElement>(null)
+  const containerRef = useRef<HTMLDivElement>(null)
+
+  // Keyboard listener for Spacebar pan
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.code === 'Space') {
+        setSpacePressed(true)
+        e.preventDefault()
+      }
+    }
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.code === 'Space') {
+        setSpacePressed(false)
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    window.addEventListener('keyup', handleKeyUp)
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown)
+      window.removeEventListener('keyup', handleKeyUp)
+    }
+  }, [])
+
+  // Prevent browser window zoom on Ctrl + Wheel
+  useEffect(() => {
+    const viewport = viewportRef.current
+    if (!viewport) return
+    const handleWheelPrevent = (e: WheelEvent) => {
+      if (e.ctrlKey) e.preventDefault()
+    }
+    viewport.addEventListener('wheel', handleWheelPrevent, { passive: false })
+    return () => {
+      viewport.removeEventListener('wheel', handleWheelPrevent)
+    }
+  }, [firstRendered])
+
+  const handleWheel = (e: React.WheelEvent) => {
+    if (e.ctrlKey) {
+      e.preventDefault()
+      const zoomFactor = 1.15
+      const nextScale = e.deltaY < 0 ? scale * zoomFactor : scale / zoomFactor
+      const clampedScale = Math.min(Math.max(nextScale, 0.25), 8)
+
+      // Zoom towards mouse position
+      const rect = e.currentTarget.getBoundingClientRect()
+      const mouseX = e.clientX - rect.left
+      const mouseY = e.clientY - rect.top
+
+      const dx = mouseX - offset.x
+      const dy = mouseY - offset.y
+
+      setOffset({
+        x: mouseX - dx * (clampedScale / scale),
+        y: mouseY - dy * (clampedScale / scale),
+      })
+      setScale(clampedScale)
+    }
+  }
+
+  const handleMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+    const isMiddleButton = e.button === 1
+    const isRightButton = e.button === 2
+    const forcePan = spacePressed || isMiddleButton || isRightButton || (e.button === 0 && !alignState.active)
+
+    if (forcePan) {
+      setIsPanning(true)
+      setPanStart({ x: e.clientX - offset.x, y: e.clientY - offset.y })
+      e.preventDefault()
+    }
+  }
+
+  const handleMouseMove = (e: React.MouseEvent) => {
+    if (isPanning) {
+      setOffset({
+        x: e.clientX - panStart.x,
+        y: e.clientY - panStart.y,
+      })
+    }
+  }
+
+  const stopDrag = () => {
+    setIsPanning(false)
+  }
+
+  // Fit to screen on initial load
+  useEffect(() => {
+    if (!firstRendered || !viewportRef.current) return
+    const viewport = viewportRef.current
+    const containerWidth = viewport.clientWidth
+    const containerHeight = viewport.clientHeight
+    const pageWidth = dimensions.width
+    const pageHeight = dimensions.height
+
+    if (containerWidth > 0 && containerHeight > 0) {
+      const scaleX = containerWidth / pageWidth
+      const scaleY = containerHeight / pageHeight
+      const newScale = Math.min(scaleX, scaleY) * 0.95
+      const newOffsetX = (containerWidth - pageWidth * newScale) / 2
+      const newOffsetY = (containerHeight - pageHeight * newScale) / 2
+
+      setScale(newScale)
+      setOffset({ x: newOffsetX, y: newOffsetY })
+    }
+  }, [firstRendered])
+
   // ─── Canvas Click Handler for Alignment points ──────────────────────────────
   function handleCanvasClick(e: React.MouseEvent<HTMLDivElement>) {
     if (!alignState.active || !alignState.layerId) return
 
     const rect = e.currentTarget.getBoundingClientRect()
-    const clickX = e.clientX - rect.left
-    const clickY = e.clientY - rect.top
+    const clickXOnViewport = e.clientX - rect.left
+    const clickYOnViewport = e.clientY - rect.top
 
-    // Map screen coordinate to canvas resolution
-    const actualWidth = dimensions.width
-    const actualHeight = dimensions.height
-    const scaleX = actualWidth / rect.width
-    const scaleY = actualHeight / rect.height
-
+    // Map screen coordinate using offset and zoom scale to raw canvas pixels
     const point = {
-      x: clickX * scaleX,
-      y: clickY * scaleY,
+      x: (clickXOnViewport - offset.x) / scale,
+      y: (clickYOnViewport - offset.y) / scale,
     }
 
     if (alignState.step === 'base1') {
@@ -502,9 +609,18 @@ export default function Sobrepor() {
 
         {/* Right panel – stacked canvases */}
         <div
-          className="flex-1 rounded-xl overflow-auto bg-white border relative p-4 flex items-center justify-center"
-          style={{ borderColor: 'var(--surface-border)', cursor: alignState.active ? 'crosshair' : 'default' }}
+          ref={viewportRef}
+          className={`flex-1 rounded-xl overflow-hidden bg-white border relative p-4 ${
+            isPanning ? 'cursor-grabbing' : alignState.active ? 'cursor-crosshair' : 'cursor-grab'
+          }`}
+          style={{ borderColor: 'var(--surface-border)' }}
+          onMouseDown={handleMouseDown}
+          onMouseMove={handleMouseMove}
+          onMouseUp={stopDrag}
+          onMouseLeave={stopDrag}
+          onWheel={handleWheel}
           onClick={handleCanvasClick}
+          onContextMenu={e => e.preventDefault()}
         >
           {rendering && (
             <div className="absolute inset-0 bg-[#0d1825]/40 backdrop-blur-xs flex items-center justify-center z-30">
@@ -524,12 +640,13 @@ export default function Sobrepor() {
             </div>
           ) : (
             <div
-              className="relative shadow-lg"
+              ref={containerRef}
+              className="absolute origin-top-left shadow-lg"
               style={{
                 width: `${dimensions.width}px`,
                 height: `${dimensions.height}px`,
-                maxWidth: '100%',
-                aspectRatio: `${dimensions.width}/${dimensions.height}`
+                transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})`,
+                transition: isPanning ? 'none' : 'transform 0.08s ease-out',
               }}
             >
               {/* Stacked Tinted Canvases */}
@@ -624,6 +741,38 @@ export default function Sobrepor() {
                 style={{ background: 'rgba(249,115,22,0.9)', color: 'white' }}>
                 Modo "Remover Textos" ativado · Apenas linhas e hachuras visíveis
               </div>
+            </div>
+          )}
+
+          {/* Floating Zoom controls */}
+          {firstRendered && (
+            <div className="absolute bottom-4 right-4 z-20 flex items-center gap-1 bg-surface-mid rounded-lg p-1 border border-surface-border pointer-events-auto">
+              <button
+                onClick={(e) => { e.stopPropagation(); setScale(s => Math.max(s / 1.3, 0.25)) }}
+                className="p-1 hover:bg-white/10 rounded cursor-pointer"
+                title="Zoom Out"
+                style={{ color: 'var(--slate)' }}
+              >
+                <ZoomOut size={14} />
+              </button>
+              <span className="text-[10px] font-mono px-1 w-12 text-center" style={{ color: 'var(--white)' }}>
+                {Math.round(scale * 100)}%
+              </span>
+              <button
+                onClick={(e) => { e.stopPropagation(); setScale(s => Math.min(s * 1.3, 8)) }}
+                className="p-1 hover:bg-white/10 rounded cursor-pointer"
+                title="Zoom In"
+                style={{ color: 'var(--slate)' }}
+              >
+                <ZoomIn size={14} />
+              </button>
+              <button
+                onClick={(e) => { e.stopPropagation(); setScale(1); setOffset({ x: 0, y: 0 }) }}
+                className="p-1 hover:bg-white/10 rounded text-[9px] font-semibold cursor-pointer"
+                style={{ color: 'var(--slate)' }}
+              >
+                1:1
+              </button>
             </div>
           )}
 

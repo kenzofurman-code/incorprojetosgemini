@@ -3,7 +3,8 @@ import { useParams, useNavigate } from 'react-router-dom'
 import {
   ArrowLeft, FileCheck, Plus, MessageSquare,
   CheckCircle, XCircle, AlertTriangle, Layers, Loader2,
-  ZoomIn, ZoomOut, Square, Edit3, MapPin
+  ZoomIn, ZoomOut, Square, Edit3, MapPin,
+  Cloud, Type, Image as ImageIcon, Hexagon, ArrowUpRight, X
 } from 'lucide-react'
 import { Card, Button, IssueCategoryBadge, StatusBadge, DataSourceBadge, DrawingQrCode } from '../../components/ui'
 import { MOCK_DRAWINGS } from '../../data/mockData'
@@ -24,21 +25,66 @@ const CATEGORY_OPTIONS: { value: IssueCategory; label: string; color: string }[]
   { value: 'outro',             label: 'Outro',                color: '#6B7280' },
 ]
 
+function getCloudPath(xPct: number, yPct: number, wPct: number, hPct: number, width: number, height: number): string {
+  const x = (xPct / 100) * width
+  const y = (yPct / 100) * height
+  const w = (wPct / 100) * width
+  const h = (hPct / 100) * height
+  
+  const step = 15 // wave bubble size
+  let path = `M ${x} ${y}`
+  
+  // Top
+  for (let cur = x; cur < x + w; cur += step) {
+    const next = Math.min(cur + step, x + w)
+    const mid = (cur + next) / 2
+    path += ` Q ${mid} ${y - 4} ${next} ${y}`
+  }
+  // Right
+  for (let cur = y; cur < y + h; cur += step) {
+    const next = Math.min(cur + step, y + h)
+    const mid = (cur + next) / 2
+    path += ` Q ${x + w + 4} ${mid} ${x + w} ${next}`
+  }
+  // Bottom
+  for (let cur = x + w; cur > x; cur -= step) {
+    const next = Math.max(cur - step, x)
+    const mid = (cur + next) / 2
+    path += ` Q ${mid} ${y + h + 4} ${next} ${y + h}`
+  }
+  // Left
+  for (let cur = y + h; cur > y; cur -= step) {
+    const next = Math.max(cur - step, y)
+    const mid = (cur + next) / 2
+    path += ` Q ${x - 4} ${mid} ${x} ${next}`
+  }
+  
+  path += ' Z'
+  return path
+}
+
 // Parse serialized markup from description
 interface ParsedMarkup {
-  type: 'pin' | 'rect' | 'scribble'
+  type: 'pin' | 'rect' | 'scribble' | 'arrow' | 'cloud' | 'polygon' | 'text'
   x: number
   y: number
   w?: number
   h?: number
   points?: { x: number; y: number }[]
+  color?: string
+  fillOpacity?: number
+  strokeWidth?: number
+  strokeDasharray?: string
+  text?: string
+  fontSize?: number
+  imageUrl?: string
   realDescription: string
 }
 
 function parseIssueDescription(desc: string): ParsedMarkup {
   try {
     const data = JSON.parse(desc)
-    if (data && (data.type === 'rect' || data.type === 'scribble' || data.type === 'pin')) {
+    if (data && typeof data === 'object' && data.type) {
       return data
     }
   } catch {}
@@ -148,7 +194,14 @@ export default function Revisao({ viewOnly = false }: { viewOnly?: boolean }) {
 
   const [selectedIssue, setSelectedIssue] = useState<string | null>(null)
   const [addingIssue, setAddingIssue] = useState(false)
-  const [markupTool, setMarkupTool] = useState<'pin' | 'rect' | 'scribble'>('pin')
+  const [markupTool, setMarkupTool] = useState<'pin' | 'rect' | 'scribble' | 'arrow' | 'cloud' | 'polygon' | 'text'>('pin')
+
+  // Advanced Styling states
+  const [markupColor, setMarkupColor] = useState('#EF4444')
+  const [markupFillOpacity, setMarkupFillOpacity] = useState(20)
+  const [markupStrokeWidth, setMarkupStrokeWidth] = useState(3)
+  const [markupStrokeDash, setMarkupStrokeDash] = useState<'solid' | 'dashed'>('solid')
+  const [markupFontSize, setMarkupFontSize] = useState(16)
 
   const [newIssue, setNewIssue] = useState({
     title: '',
@@ -168,16 +221,25 @@ export default function Revisao({ viewOnly = false }: { viewOnly?: boolean }) {
   const [renderingPdf, setRenderingPdf] = useState(false)
   const [pdfError, setPdfError] = useState<string | null>(null)
 
+  // Zoom & Pan State
+  const [scale, setScale] = useState(1)
+  const [renderedScale, setRenderedScale] = useState(1)
+  const [offset, setOffset] = useState({ x: 0, y: 0 })
+  const [isPanning, setIsPanning] = useState(false)
+  const [panStart, setPanStart] = useState({ x: 0, y: 0 })
+  const [spacePressed, setSpacePressed] = useState(false)
+  const containerRef = useRef<HTMLDivElement>(null)
+
   useEffect(() => {
-    if (!drawing?.pdfUrl) {
-      setRenderedPage(null)
-      return
-    }
+    if (!drawing?.pdfUrl) return
     let cancelled = false
     setRenderingPdf(true)
     setPdfError(null)
 
-    renderPdfPage(drawing.pdfUrl, 1, false)
+    // Render page canvas at scale 2.5 * renderedScale
+    const targetScale = 2.5 * renderedScale
+
+    renderPdfPage(drawing.pdfUrl, 1, false, targetScale)
       .then(page => {
         if (!cancelled) setRenderedPage(page)
       })
@@ -194,19 +256,43 @@ export default function Revisao({ viewOnly = false }: { viewOnly?: boolean }) {
     return () => {
       cancelled = true
     }
-  }, [drawing?.pdfUrl])
+  }, [drawing?.pdfUrl, renderedScale])
 
   const dimensions = renderedPage
-    ? { width: renderedPage.canvas.width, height: renderedPage.canvas.height }
+    ? { width: renderedPage.canvas.width / renderedScale, height: renderedPage.canvas.height / renderedScale }
     : { width: 800, height: 600 }
 
-  // ─── Zoom & Pan State ──────────────────────────────────────────────────────
-  const [scale, setScale] = useState(1)
-  const [offset, setOffset] = useState({ x: 0, y: 0 })
-  const [isPanning, setIsPanning] = useState(false)
-  const [panStart, setPanStart] = useState({ x: 0, y: 0 })
-  const [spacePressed, setSpacePressed] = useState(false)
-  const containerRef = useRef<HTMLDivElement>(null)
+
+
+  // Debounce scale updates to avoid lagging during zoom wheel
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setRenderedScale(scale)
+    }, 250)
+    return () => clearTimeout(timer)
+  }, [scale])
+
+  // Fit to screen on initial load
+  useEffect(() => {
+    if (!renderedPage || !containerRef.current) return
+    const container = containerRef.current
+    const containerWidth = container.clientWidth
+    const containerHeight = container.clientHeight
+    const pageWidth = renderedPage.canvas.width / renderedScale
+    const pageHeight = renderedPage.canvas.height / renderedScale
+
+    if (containerWidth > 0 && containerHeight > 0) {
+      const scaleX = containerWidth / pageWidth
+      const scaleY = containerHeight / pageHeight
+      const newScale = Math.min(scaleX, scaleY) * 0.95
+      const newOffsetX = (containerWidth - pageWidth * newScale) / 2
+      const newOffsetY = (containerHeight - pageHeight * newScale) / 2
+
+      setScale(newScale)
+      setRenderedScale(newScale)
+      setOffset({ x: newOffsetX, y: newOffsetY })
+    }
+  }, [drawing?.pdfUrl])
 
   // Catch Spacebar key listeners for panning shortcut
   useEffect(() => {
@@ -300,12 +386,24 @@ export default function Revisao({ viewOnly = false }: { viewOnly?: boolean }) {
           type: 'pin',
           x: xPct,
           y: yPct,
+          color: markupColor,
         })
-      } else if (markupTool === 'rect') {
+      } else if (markupTool === 'rect' || markupTool === 'cloud' || markupTool === 'arrow') {
         setBoxStart({ x: xPct, y: yPct })
         setBoxCurrent({ x: xPct, y: yPct })
       } else if (markupTool === 'scribble') {
         setDrawingPoints([{ x: xPct, y: yPct }])
+      } else if (markupTool === 'polygon') {
+        setDrawingPoints(prev => [...prev, { x: xPct, y: yPct }])
+      } else if (markupTool === 'text') {
+        setPendingMarkup({
+          type: 'text',
+          x: xPct,
+          y: yPct,
+          text: '',
+          color: markupColor,
+          fontSize: markupFontSize,
+        })
       }
     }
   }
@@ -328,7 +426,7 @@ export default function Revisao({ viewOnly = false }: { viewOnly?: boolean }) {
       const xPct = (xInCanvasPixels / dimensions.width) * 100
       const yPct = (yInCanvasPixels / dimensions.height) * 100
 
-      if (markupTool === 'rect' && boxStart) {
+      if ((markupTool === 'rect' || markupTool === 'cloud' || markupTool === 'arrow') && boxStart) {
         setBoxCurrent({ x: xPct, y: yPct })
       } else if (markupTool === 'scribble' && drawingPoints.length > 0) {
         setDrawingPoints(prev => [...prev, { x: xPct, y: yPct }])
@@ -351,10 +449,43 @@ export default function Revisao({ viewOnly = false }: { viewOnly?: boolean }) {
         if (w > 0.5 && h > 0.5) {
           setPendingMarkup({
             type: 'rect',
-            x,
-            y,
-            w,
-            h,
+            x, y, w, h,
+            color: markupColor,
+            fillOpacity: markupFillOpacity,
+            strokeWidth: markupStrokeWidth,
+            strokeDasharray: markupStrokeDash === 'dashed' ? '4 2' : undefined,
+          })
+        }
+        setBoxStart(null)
+        setBoxCurrent(null)
+      } else if (markupTool === 'cloud' && boxStart && boxCurrent) {
+        const x = Math.min(boxStart.x, boxCurrent.x)
+        const y = Math.min(boxStart.y, boxCurrent.y)
+        const w = Math.abs(boxStart.x - boxCurrent.x)
+        const h = Math.abs(boxStart.y - boxCurrent.y)
+        if (w > 0.5 && h > 0.5) {
+          setPendingMarkup({
+            type: 'cloud',
+            x, y, w, h,
+            color: markupColor,
+            fillOpacity: markupFillOpacity,
+            strokeWidth: markupStrokeWidth,
+          })
+        }
+        setBoxStart(null)
+        setBoxCurrent(null)
+      } else if (markupTool === 'arrow' && boxStart && boxCurrent) {
+        const w = boxCurrent.x - boxStart.x
+        const h = boxCurrent.y - boxStart.y
+        if (Math.abs(w) > 0.5 || Math.abs(h) > 0.5) {
+          setPendingMarkup({
+            type: 'arrow',
+            x: boxStart.x,
+            y: boxStart.y,
+            w, h,
+            color: markupColor,
+            strokeWidth: markupStrokeWidth,
+            strokeDasharray: markupStrokeDash === 'dashed' ? '4 2' : undefined,
           })
         }
         setBoxStart(null)
@@ -365,9 +496,27 @@ export default function Revisao({ viewOnly = false }: { viewOnly?: boolean }) {
           x: drawingPoints[0].x,
           y: drawingPoints[0].y,
           points: drawingPoints,
+          color: markupColor,
+          strokeWidth: markupStrokeWidth,
         })
         setDrawingPoints([])
       }
+    }
+  }
+
+  const handleContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault()
+    if (addingIssue && markupTool === 'polygon' && drawingPoints.length > 1) {
+      setPendingMarkup({
+        type: 'polygon',
+        x: drawingPoints[0].x,
+        y: drawingPoints[0].y,
+        points: drawingPoints,
+        color: markupColor,
+        fillOpacity: markupFillOpacity,
+        strokeWidth: markupStrokeWidth,
+      })
+      setDrawingPoints([])
     }
   }
 
@@ -382,6 +531,13 @@ export default function Revisao({ viewOnly = false }: { viewOnly?: boolean }) {
       w: pendingMarkup.w,
       h: pendingMarkup.h,
       points: pendingMarkup.points,
+      color: pendingMarkup.color || markupColor,
+      fillOpacity: pendingMarkup.fillOpacity != null ? pendingMarkup.fillOpacity : markupFillOpacity,
+      strokeWidth: pendingMarkup.strokeWidth || markupStrokeWidth,
+      strokeDasharray: pendingMarkup.strokeDasharray || (markupStrokeDash === 'dashed' ? '4 2' : undefined),
+      text: pendingMarkup.text,
+      fontSize: pendingMarkup.fontSize || markupFontSize,
+      imageUrl: pendingMarkup.imageUrl,
       realDescription: newIssue.description,
     })
 
@@ -637,29 +793,114 @@ export default function Revisao({ viewOnly = false }: { viewOnly?: boolean }) {
 
       {/* Adding issue toolbar instructions */}
       {addingIssue && (
-        <Card className="p-2 flex items-center justify-between bg-orange-500/10 border-orange-500/30 flex-shrink-0">
-          <div className="text-xs font-semibold text-orange-400 flex items-center gap-2">
-            <Edit3 size={14} /> Modo Marcação Ativo: Escolha uma ferramenta à direita e clique/desenhe na prancha.
+        <Card className="p-3 bg-slate-900 border-orange-500/30 flex flex-col gap-2 flex-shrink-0">
+          <div className="flex items-center justify-between">
+            <div className="text-xs font-semibold text-orange-400 flex items-center gap-2">
+              <Edit3 size={14} /> Modo Marcação Ativo: Escolha uma ferramenta e desenhe na prancha.
+            </div>
+            <button onClick={() => { setAddingIssue(false); setPendingMarkup(null); setDrawingPoints([]) }} className="text-xs text-red-400 hover:text-red-300 font-semibold cursor-pointer">
+              Cancelar
+            </button>
           </div>
-          <div className="flex items-center gap-1.5">
-            {[
-              { type: 'pin', label: 'Ponto', icon: <MapPin size={12} /> },
-              { type: 'rect', label: 'Caixa Vermelha', icon: <Square size={12} /> },
-              { type: 'scribble', label: 'Desenho à Mão', icon: <Edit3 size={12} /> }
-            ].map(tool => (
-              <button
-                key={tool.type}
-                onClick={() => { setMarkupTool(tool.type as any); setPendingMarkup(null) }}
-                className="flex items-center gap-1 px-2.5 py-1 rounded text-xs transition-colors"
-                style={{
-                  background: markupTool === tool.type ? 'var(--orange)' : 'var(--surface-mid)',
-                  color: 'white',
-                }}
-              >
-                {tool.icon}
-                <span>{tool.label}</span>
-              </button>
-            ))}
+          
+          <div className="flex flex-wrap items-center gap-4 pt-2 border-t border-slate-800">
+            {/* Tools select */}
+            <div className="flex items-center gap-1">
+              {[
+                { type: 'pin', label: 'Ponto', icon: <MapPin size={12} /> },
+                { type: 'rect', label: 'Caixa', icon: <Square size={12} /> },
+                { type: 'cloud', label: 'Nuvem', icon: <Cloud size={12} /> },
+                { type: 'scribble', label: 'Lápis', icon: <Edit3 size={12} /> },
+                { type: 'arrow', label: 'Seta', icon: <ArrowUpRight size={12} /> },
+                { type: 'polygon', label: 'Polígono', icon: <Hexagon size={12} /> },
+                { type: 'text', label: 'Texto', icon: <Type size={12} /> }
+              ].map(tool => (
+                <button
+                  key={tool.type}
+                  onClick={() => { setMarkupTool(tool.type as any); setPendingMarkup(null); setDrawingPoints([]) }}
+                  className="flex items-center gap-1 px-2.5 py-1 rounded text-xs transition-colors cursor-pointer"
+                  style={{
+                    background: markupTool === tool.type ? 'var(--orange)' : 'var(--surface-mid)',
+                    color: 'white',
+                  }}
+                >
+                  {tool.icon}
+                  <span>{tool.label}</span>
+                </button>
+              ))}
+            </div>
+
+            <div className="h-6 w-px bg-slate-800" />
+
+            {/* Style bar */}
+            <div className="flex flex-wrap items-center gap-3 text-[11px]">
+              {/* Color picker */}
+              <div className="flex items-center gap-1">
+                <span className="text-slate-400">Cor:</span>
+                <div className="flex gap-0.5">
+                  {['#EF4444', '#22C55E', '#3B82F6', '#EAB308', '#F97316', '#111827'].map(c => (
+                    <button
+                      key={c}
+                      onClick={() => setMarkupColor(c)}
+                      className="w-3.5 h-3.5 rounded-full transition-all cursor-pointer"
+                      style={{
+                        background: c,
+                        border: markupColor === c ? '2px solid white' : '1px solid rgba(255,255,255,0.2)',
+                      }}
+                    />
+                  ))}
+                </div>
+              </div>
+
+              <div className="h-4 w-px bg-slate-800" />
+
+              {/* Opacity */}
+              <div className="flex items-center gap-1">
+                <span className="text-slate-400">Preenchimento:</span>
+                <select
+                  value={markupFillOpacity}
+                  onChange={e => setMarkupFillOpacity(Number(e.target.value))}
+                  className="bg-slate-800 border border-slate-700 text-white rounded px-1.5 py-0.5 outline-none cursor-pointer"
+                >
+                  <option value={0}>Sem fundo</option>
+                  <option value={20}>20% (Marca-texto)</option>
+                  <option value={50}>50%</option>
+                  <option value={80}>80%</option>
+                  <option value={100}>100%</option>
+                </select>
+              </div>
+
+              <div className="h-4 w-px bg-slate-800" />
+
+              {/* Stroke Style */}
+              <div className="flex items-center gap-1">
+                <span className="text-slate-400">Linha:</span>
+                <select
+                  value={markupStrokeDash}
+                  onChange={e => setMarkupStrokeDash(e.target.value as any)}
+                  className="bg-slate-800 border border-slate-700 text-white rounded px-1.5 py-0.5 outline-none cursor-pointer"
+                >
+                  <option value="solid">Contínua</option>
+                  <option value="dashed">Tracejada</option>
+                </select>
+              </div>
+
+              <div className="h-4 w-px bg-slate-800" />
+
+              {/* Font Size */}
+              <div className="flex items-center gap-1">
+                <span className="text-slate-400">Texto:</span>
+                <select
+                  value={markupFontSize}
+                  onChange={e => setMarkupFontSize(Number(e.target.value))}
+                  className="bg-slate-800 border border-slate-700 text-white rounded px-1.5 py-0.5 outline-none cursor-pointer"
+                >
+                  <option value={12}>12px</option>
+                  <option value={16}>16px</option>
+                  <option value={24}>24px</option>
+                </select>
+              </div>
+            </div>
           </div>
         </Card>
       )}
@@ -679,7 +920,7 @@ export default function Revisao({ viewOnly = false }: { viewOnly?: boolean }) {
             onMouseDown={handleMouseDown}
             onMouseMove={handleMouseMove}
             onMouseUp={handleMouseUp}
-            onContextMenu={e => e.preventDefault()} // prevent right-click menu during panning
+            onContextMenu={handleContextMenu}
           >
             {renderingPdf && (
               <div className="absolute inset-0 bg-[#0d1825]/40 backdrop-blur-xs flex items-center justify-center z-30">
@@ -721,13 +962,17 @@ export default function Revisao({ viewOnly = false }: { viewOnly?: boolean }) {
                     </div>
                   )}
 
-                  {/* SVG Vector Overlays for Box/Scribble Markups (Layered on top of canvas) */}
+                  {/* SVG Vector Overlays for Box/Scribble/Cloud/Arrow/Polygon/Text Markups */}
                   <svg className="absolute inset-0 w-full h-full pointer-events-none z-10">
                     {/* Render saved markups from issues database */}
                     {issues.map(issue => {
                       const markup = parseIssueDescription(issue.description)
                       const cat = CATEGORY_OPTIONS.find(c => c.value === issue.category)
-                      const color = cat?.color || '#EF4444'
+                      const baseColor = cat?.color || '#EF4444'
+                      const color = markup.color || baseColor
+                      const fillOpacity = markup.fillOpacity != null ? markup.fillOpacity / 100 : 0
+                      const strokeWidth = markup.strokeWidth || 3
+                      const strokeDasharray = markup.strokeDasharray || undefined
 
                       if (markup.type === 'rect' && markup.w && markup.h) {
                         return (
@@ -737,10 +982,66 @@ export default function Revisao({ viewOnly = false }: { viewOnly?: boolean }) {
                             y={`${markup.y}%`}
                             width={`${markup.w}%`}
                             height={`${markup.h}%`}
-                            fill="none"
+                            fill={fillOpacity > 0 ? color : 'none'}
+                            fillOpacity={fillOpacity}
                             stroke={color}
-                            strokeWidth="3.5"
-                            strokeDasharray="4 2"
+                            strokeWidth={strokeWidth}
+                            strokeDasharray={strokeDasharray}
+                          />
+                        )
+                      }
+                      if (markup.type === 'cloud' && markup.w && markup.h) {
+                        const pathData = getCloudPath(markup.x, markup.y, markup.w, markup.h, dimensions.width, dimensions.height)
+                        return (
+                          <path
+                            key={issue.id}
+                            d={pathData}
+                            fill={fillOpacity > 0 ? color : 'none'}
+                            fillOpacity={fillOpacity}
+                            stroke={color}
+                            strokeWidth={strokeWidth}
+                          />
+                        )
+                      }
+                      if (markup.type === 'arrow' && markup.w != null && markup.h != null) {
+                        const x1 = (markup.x / 100) * dimensions.width
+                        const y1 = (markup.y / 100) * dimensions.height
+                        const x2 = ((markup.x + markup.w) / 100) * dimensions.width
+                        const y2 = ((markup.y + markup.h) / 100) * dimensions.height
+                        const angle = Math.atan2(y2 - y1, x2 - x1)
+                        const arrowLength = 12
+                        const h1x = x2 - arrowLength * Math.cos(angle - Math.PI / 6)
+                        const h1y = y2 - arrowLength * Math.sin(angle - Math.PI / 6)
+                        const h2x = x2 - arrowLength * Math.cos(angle + Math.PI / 6)
+                        const h2y = y2 - arrowLength * Math.sin(angle + Math.PI / 6)
+                        return (
+                          <g key={issue.id}>
+                            <line
+                              x1={x1}
+                              y1={y1}
+                              x2={x2}
+                              y2={y2}
+                              stroke={color}
+                              strokeWidth={strokeWidth}
+                              strokeDasharray={strokeDasharray}
+                            />
+                            <polygon
+                              points={`${x2},${y2} ${h1x},${h1y} ${h2x},${h2y}`}
+                              fill={color}
+                            />
+                          </g>
+                        )
+                      }
+                      if (markup.type === 'polygon' && markup.points) {
+                        const ptsStr = markup.points.map(p => `${(p.x / 100) * dimensions.width},${(p.y / 100) * dimensions.height}`).join(' ')
+                        return (
+                          <polygon
+                            key={issue.id}
+                            points={ptsStr}
+                            fill={fillOpacity > 0 ? color : 'none'}
+                            fillOpacity={fillOpacity}
+                            stroke={color}
+                            strokeWidth={strokeWidth}
                           />
                         )
                       }
@@ -754,10 +1055,25 @@ export default function Revisao({ viewOnly = false }: { viewOnly?: boolean }) {
                             d={pathData}
                             fill="none"
                             stroke={color}
-                            strokeWidth="4"
+                            strokeWidth={strokeWidth}
                             strokeLinecap="round"
                             strokeLinejoin="round"
                           />
+                        )
+                      }
+                      if (markup.type === 'text' && markup.text) {
+                        return (
+                          <text
+                            key={issue.id}
+                            x={`${markup.x}%`}
+                            y={`${markup.y}%`}
+                            fill={color}
+                            fontSize={`${markup.fontSize || 14}px`}
+                            fontWeight="bold"
+                            dominantBaseline="middle"
+                          >
+                            {markup.text}
+                          </text>
                         )
                       }
                       return null
@@ -770,11 +1086,82 @@ export default function Revisao({ viewOnly = false }: { viewOnly?: boolean }) {
                         y={`${Math.min(boxStart.y, boxCurrent.y)}%`}
                         width={`${Math.abs(boxStart.x - boxCurrent.x)}%`}
                         height={`${Math.abs(boxStart.y - boxCurrent.y)}%`}
-                        fill="rgba(239, 68, 68, 0.15)"
-                        stroke="#EF4444"
-                        strokeWidth="3"
-                        strokeDasharray="4 2"
+                        fill={markupFillOpacity > 0 ? markupColor : 'rgba(239, 68, 68, 0.05)'}
+                        fillOpacity={markupFillOpacity / 100}
+                        stroke={markupColor}
+                        strokeWidth={markupStrokeWidth}
+                        strokeDasharray={markupStrokeDash === 'dashed' ? '4 2' : undefined}
                       />
+                    )}
+
+                    {addingIssue && markupTool === 'cloud' && boxStart && boxCurrent && (
+                      <path
+                        d={getCloudPath(
+                          Math.min(boxStart.x, boxCurrent.x),
+                          Math.min(boxStart.y, boxCurrent.y),
+                          Math.abs(boxStart.x - boxCurrent.x),
+                          Math.abs(boxStart.y - boxCurrent.y),
+                          dimensions.width,
+                          dimensions.height
+                        )}
+                        fill={markupFillOpacity > 0 ? markupColor : 'none'}
+                        fillOpacity={markupFillOpacity / 100}
+                        stroke={markupColor}
+                        strokeWidth={markupStrokeWidth}
+                      />
+                    )}
+
+                    {addingIssue && markupTool === 'arrow' && boxStart && boxCurrent && (() => {
+                      const x1 = (boxStart.x / 100) * dimensions.width
+                      const y1 = (boxStart.y / 100) * dimensions.height
+                      const x2 = (boxCurrent.x / 100) * dimensions.width
+                      const y2 = (boxCurrent.y / 100) * dimensions.height
+                      const angle = Math.atan2(y2 - y1, x2 - x1)
+                      const arrowLength = 12
+                      const h1x = x2 - arrowLength * Math.cos(angle - Math.PI / 6)
+                      const h1y = y2 - arrowLength * Math.sin(angle - Math.PI / 6)
+                      const h2x = x2 - arrowLength * Math.cos(angle + Math.PI / 6)
+                      const h2y = y2 - arrowLength * Math.sin(angle + Math.PI / 6)
+                      return (
+                        <g>
+                          <line
+                            x1={x1}
+                            y1={y1}
+                            x2={x2}
+                            y2={y2}
+                            stroke={markupColor}
+                            strokeWidth={markupStrokeWidth}
+                            strokeDasharray={markupStrokeDash === 'dashed' ? '4 2' : undefined}
+                          />
+                          <polygon
+                            points={`${x2},${y2} ${h1x},${h1y} ${h2x},${h2y}`}
+                            fill={markupColor}
+                          />
+                        </g>
+                      )
+                    })()}
+
+                    {addingIssue && markupTool === 'polygon' && drawingPoints.length > 0 && (
+                      <g>
+                        <polyline
+                          points={drawingPoints.map(p => `${(p.x / 100) * dimensions.width},${(p.y / 100) * dimensions.height}`).join(' ')}
+                          fill={markupFillOpacity > 0 ? markupColor : 'none'}
+                          fillOpacity={markupFillOpacity / 100}
+                          stroke={markupColor}
+                          strokeWidth={markupStrokeWidth}
+                        />
+                        {drawingPoints.map((p, i) => (
+                          <circle
+                            key={i}
+                            cx={(p.x / 100) * dimensions.width}
+                            cy={(p.y / 100) * dimensions.height}
+                            r="4"
+                            fill={markupColor}
+                            stroke="white"
+                            strokeWidth="1.5"
+                          />
+                        ))}
+                      </g>
                     )}
 
                     {addingIssue && markupTool === 'scribble' && drawingPoints.length > 1 && (
@@ -783,8 +1170,8 @@ export default function Revisao({ viewOnly = false }: { viewOnly?: boolean }) {
                           `${i === 0 ? 'M' : 'L'} ${(p.x / 100) * dimensions.width} ${(p.y / 100) * dimensions.height}`
                         ).join(' ')}
                         fill="none"
-                        stroke="#EF4444"
-                        strokeWidth="4"
+                        stroke={markupColor}
+                        strokeWidth={markupStrokeWidth}
                         strokeLinecap="round"
                         strokeLinejoin="round"
                       />
@@ -804,23 +1191,10 @@ export default function Revisao({ viewOnly = false }: { viewOnly?: boolean }) {
                       />
                     ))}
 
-                    {/* Render active pending markup pin indicator */}
-                    {addingIssue && pendingMarkup && pendingMarkup.type === 'pin' && (
+                    {/* Render active pending markup indicator */}
+                    {addingIssue && pendingMarkup && (
                       <div
-                        className="absolute w-5.5 h-5.5 rounded-full border-2 border-white animate-pulse z-30"
-                        style={{
-                          left: `${pendingMarkup.x}%`,
-                          top: `${pendingMarkup.y}%`,
-                          transform: 'translate(-50%,-50%)',
-                          background: 'var(--orange)',
-                        }}
-                      />
-                    )}
-
-                    {/* Render active pending markup box indicator */}
-                    {addingIssue && pendingMarkup && pendingMarkup.type === 'rect' && (
-                      <div
-                        className="absolute w-5 h-5 rounded-full border-2 border-white flex items-center justify-center text-[10px] font-bold shadow-lg z-30"
+                        className="absolute w-5.5 h-5.5 rounded-full border-2 border-white flex items-center justify-center text-[8px] font-bold shadow-lg z-30 animate-pulse"
                         style={{
                           left: `${pendingMarkup.x}%`,
                           top: `${pendingMarkup.y}%`,
@@ -829,23 +1203,13 @@ export default function Revisao({ viewOnly = false }: { viewOnly?: boolean }) {
                           color: 'white'
                         }}
                       >
-                        Nu
-                      </div>
-                    )}
-
-                    {/* Render active pending markup scribble indicator */}
-                    {addingIssue && pendingMarkup && pendingMarkup.type === 'scribble' && (
-                      <div
-                        className="absolute w-5 h-5 rounded-full border-2 border-white flex items-center justify-center text-[10px] font-bold shadow-lg z-30"
-                        style={{
-                          left: `${pendingMarkup.x}%`,
-                          top: `${pendingMarkup.y}%`,
-                          transform: 'translate(-50%,-50%)',
-                          background: 'var(--orange)',
-                          color: 'white'
-                        }}
-                      >
-                        Sc
+                        {pendingMarkup.type === 'rect' && 'Cx'}
+                        {pendingMarkup.type === 'cloud' && 'Nv'}
+                        {pendingMarkup.type === 'scribble' && 'Ds'}
+                        {pendingMarkup.type === 'arrow' && 'St'}
+                        {pendingMarkup.type === 'polygon' && 'Pl'}
+                        {pendingMarkup.type === 'text' && 'Tx'}
+                        {pendingMarkup.type === 'pin' && 'Pt'}
                       </div>
                     )}
                   </div>
@@ -890,45 +1254,100 @@ export default function Revisao({ viewOnly = false }: { viewOnly?: boolean }) {
         <div className="w-80 flex-shrink-0 space-y-3 overflow-y-auto pr-1">
           {/* Add issue form */}
           {(addingIssue && pendingMarkup) && (
-            <Card className="p-3 space-y-2 border-2" style={{ borderColor: 'var(--orange)' }}>
-              <div className="text-xs font-bold" style={{ color: 'var(--orange)' }}>
-                Nova Issue · {pendingMarkup.type === 'rect' ? 'Caixa demarcada' : pendingMarkup.type === 'scribble' ? 'Desenho livre' : 'Ponto marcado'}
+            <Card className="p-3 space-y-2.5 border-2 bg-slate-900/50" style={{ borderColor: 'var(--orange)' }}>
+              <div className="text-xs font-bold font-mono" style={{ color: 'var(--orange)' }}>
+                Nova Issue · {
+                  pendingMarkup.type === 'rect' ? 'Caixa de Marcação' :
+                  pendingMarkup.type === 'cloud' ? 'Nuvem de Revisão' :
+                  pendingMarkup.type === 'scribble' ? 'Desenho Livre' :
+                  pendingMarkup.type === 'arrow' ? 'Seta Indicativa' :
+                  pendingMarkup.type === 'polygon' ? 'Polígono' :
+                  pendingMarkup.type === 'text' ? 'Texto' : 'Ponto'
+                }
               </div>
+
+              {pendingMarkup.type === 'text' && (
+                <input
+                  type="text"
+                  placeholder="Texto a exibir no desenho *"
+                  value={pendingMarkup.text || ''}
+                  onChange={e => setPendingMarkup({ ...pendingMarkup, text: e.target.value })}
+                  className="w-full text-sm rounded px-2 py-1.5 outline-none font-bold"
+                  style={{ background: 'var(--surface-mid)', border: '1px solid var(--orange)', color: 'var(--white)' }}
+                />
+              )}
+
               <input
                 type="text"
                 placeholder="Título da issue *"
                 value={newIssue.title}
-                onChange={e => setNewIssue(prev => ({ ...prev, title: e.target.value }))}
+                onChange={e => setNewIssue({ ...newIssue, title: e.target.value })}
                 className="w-full text-sm rounded px-2 py-1.5 outline-none"
                 style={{ background: 'var(--surface-mid)', border: '1px solid var(--surface-border)', color: 'var(--white)' }}
               />
+              
               <textarea
                 placeholder="Descrição das alterações solicitadas..."
                 rows={3}
                 value={newIssue.description}
-                onChange={e => setNewIssue(prev => ({ ...prev, description: e.target.value }))}
+                onChange={e => setNewIssue({ ...newIssue, description: e.target.value })}
                 className="w-full text-sm rounded px-2 py-1.5 outline-none resize-none"
                 style={{ background: 'var(--surface-mid)', border: '1px solid var(--surface-border)', color: 'var(--white)' }}
               />
-              <select
-                value={newIssue.category}
-                onChange={e => setNewIssue(prev => ({ ...prev, category: e.target.value as IssueCategory }))}
-                className="w-full text-sm rounded px-2 py-1.5 outline-none"
-                style={{ background: 'var(--surface-mid)', border: '1px solid var(--surface-border)', color: 'var(--white)' }}
-              >
-                {CATEGORY_OPTIONS.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
-              </select>
-              <select
-                value={newIssue.priority}
-                onChange={e => setNewIssue(prev => ({ ...prev, priority: e.target.value as any }))}
-                className="w-full text-sm rounded px-2 py-1.5 outline-none"
-                style={{ background: 'var(--surface-mid)', border: '1px solid var(--surface-border)', color: 'var(--white)' }}
-              >
-                <option value="alta">Alta prioridade</option>
-                <option value="media">Média prioridade</option>
-                <option value="baixa">Baixa prioridade</option>
-              </select>
-              <div className="flex gap-2 pt-1">
+              
+              <div className="grid grid-cols-2 gap-2">
+                <select
+                  value={newIssue.category}
+                  onChange={e => setNewIssue({ ...newIssue, category: e.target.value as IssueCategory })}
+                  className="text-xs rounded px-1.5 py-1.5 outline-none"
+                  style={{ background: 'var(--surface-mid)', border: '1px solid var(--surface-border)', color: 'var(--white)' }}
+                >
+                  {CATEGORY_OPTIONS.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
+                </select>
+                <select
+                  value={newIssue.priority}
+                  onChange={e => setNewIssue({ ...newIssue, priority: e.target.value as any })}
+                  className="text-xs rounded px-1.5 py-1.5 outline-none"
+                  style={{ background: 'var(--surface-mid)', border: '1px solid var(--surface-border)', color: 'var(--white)' }}
+                >
+                  <option value="alta">Prioridade Alta</option>
+                  <option value="media">Prioridade Média</option>
+                  <option value="baixa">Prioridade Baixa</option>
+                </select>
+              </div>
+
+              {/* Photo attachment input */}
+              <div className="space-y-1 border-t border-slate-800 pt-2">
+                <span className="text-[10px] text-slate-400 font-semibold block">Anexar Foto de Campo (Opcional)</span>
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={e => {
+                    const file = e.target.files?.[0]
+                    if (file) {
+                      const reader = new FileReader()
+                      reader.onloadend = () => {
+                        setPendingMarkup({ ...pendingMarkup, imageUrl: reader.result as string })
+                      }
+                      reader.readAsDataURL(file)
+                    }
+                  }}
+                  className="w-full text-[10px] text-slate-400 file:mr-2 file:py-1 file:px-2 file:rounded file:border-0 file:text-[10px] file:font-semibold file:bg-slate-800 file:text-slate-300 hover:file:bg-slate-700 cursor-pointer"
+                />
+                {pendingMarkup.imageUrl && (
+                  <div className="relative w-full h-24 rounded border border-slate-700 overflow-hidden bg-slate-950 mt-1 flex items-center justify-center">
+                    <img src={pendingMarkup.imageUrl} className="max-w-full max-h-full object-contain" />
+                    <button
+                      onClick={() => setPendingMarkup({ ...pendingMarkup, imageUrl: undefined })}
+                      className="absolute top-1 right-1 p-0.5 bg-red-600 rounded-full text-white hover:bg-red-500 cursor-pointer"
+                    >
+                      <X size={10} />
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex gap-2 pt-1 border-t border-slate-800">
                 <Button variant="ghost" size="sm" onClick={() => { setPendingMarkup(null); setDrawingPoints([]) }} className="flex-1">
                   Refazer
                 </Button>
@@ -944,7 +1363,7 @@ export default function Revisao({ viewOnly = false }: { viewOnly?: boolean }) {
             <Card className="p-3 space-y-2" style={{ border: '1px solid var(--navy-light)' }}>
               <div className="flex items-center justify-between">
                 <span className="text-[10px] font-bold uppercase text-slate-400">Issue Selecionada</span>
-                <button onClick={() => setSelectedIssue(null)} className="text-xs text-slate-500 hover:underline">Fechar</button>
+                <button onClick={() => setSelectedIssue(null)} className="text-xs text-slate-500 hover:underline font-semibold cursor-pointer">Fechar</button>
               </div>
               <h4 className="text-sm font-bold text-white leading-tight">{selectedIssueData.title}</h4>
               <div className="flex gap-1.5 flex-wrap pt-0.5">
@@ -961,6 +1380,25 @@ export default function Revisao({ viewOnly = false }: { viewOnly?: boolean }) {
               <p className="text-xs text-slate-300 bg-surface-mid p-2 rounded whitespace-pre-line border border-surface-border">
                 {parseIssueDescription(selectedIssueData.description).realDescription || 'Sem descrição.'}
               </p>
+              {(() => {
+                const markup = parseIssueDescription(selectedIssueData.description)
+                return markup.imageUrl ? (
+                  <div className="mt-3 space-y-1">
+                    <span className="text-[10px] text-slate-400 font-semibold block">FOTO ANEXADA:</span>
+                    <div className="relative w-full rounded border border-slate-700 overflow-hidden bg-slate-950 flex items-center justify-center cursor-zoom-in group">
+                      <img src={markup.imageUrl} className="max-w-full max-h-48 object-contain transition-transform group-hover:scale-105" />
+                      <a
+                        href={markup.imageUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity text-white text-xs font-bold"
+                      >
+                        Visualizar Foto Original ↗
+                      </a>
+                    </div>
+                  </div>
+                ) : null
+              })()}
             </Card>
           )}
 

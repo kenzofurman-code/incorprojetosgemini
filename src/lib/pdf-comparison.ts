@@ -19,11 +19,11 @@ export interface RenderedPdfPage {
   textItemsRemoved: number
 }
 
-export async function renderPdfPage(url: string, pageNumber: number, hideText: boolean): Promise<RenderedPdfPage> {
+export async function renderPdfPage(url: string, pageNumber: number, hideText: boolean, customScale = 2.5): Promise<RenderedPdfPage> {
   const pdf = await loadDocument(url)
   const safePage = Math.min(Math.max(pageNumber, 1), pdf.numPages)
   const page = await pdf.getPage(safePage)
-  const viewport = page.getViewport({ scale: 2.5 })
+  const viewport = page.getViewport({ scale: customScale })
   const canvas = document.createElement('canvas')
   canvas.width = Math.ceil(viewport.width)
   canvas.height = Math.ceil(viewport.height)

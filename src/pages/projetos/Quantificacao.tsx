@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
   ArrowLeft, ZoomIn, ZoomOut, Loader2, Info, Check, Trash2,
-  Ruler, Layout, Edit, Compass, Maximize, Square, Type
+  Ruler, Layout, Edit, Compass, Maximize, Square, Type, Magnet
 } from 'lucide-react'
 import { Card, Button, DataSourceBadge } from '../../components/ui'
 import { getDrawing } from '../../lib/queries'
@@ -82,6 +82,7 @@ export default function Quantificacao() {
 
   // Zoom & Pan states
   const [scale, setScale] = useState(1)
+  const [renderedScale, setRenderedScale] = useState(1)
   const [offset, setOffset] = useState({ x: 0, y: 0 })
   const [isPanning, setIsPanning] = useState(false)
   const [panStart, setPanStart] = useState({ x: 0, y: 0 })
@@ -90,6 +91,45 @@ export default function Quantificacao() {
   const viewportRef = useRef<HTMLDivElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
+
+  // CAD Snapping states
+  const [snapPoints, setSnapPoints] = useState<{ x: number; y: number }[]>([])
+  const [activeSnapPoint, setActiveSnapPoint] = useState<{ x: number; y: number } | null>(null)
+  const [snapEnabled, setSnapEnabled] = useState(true)
+
+  // Debounce scale updates to avoid lagging during zoom wheel
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setRenderedScale(scale)
+    }, 250)
+    return () => clearTimeout(timer)
+  }, [scale])
+
+  // Fit to screen on initial load
+  useEffect(() => {
+    if (!renderedPage || !containerRef.current) return
+    const container = containerRef.current
+    const containerWidth = container.clientWidth
+    const containerHeight = container.clientHeight
+    const pageWidth = renderedPage.canvas.width / renderedScale
+    const pageHeight = renderedPage.canvas.height / renderedScale
+
+    if (containerWidth > 0 && containerHeight > 0) {
+      const scaleX = containerWidth / pageWidth
+      const scaleY = containerHeight / pageHeight
+      const newScale = Math.min(scaleX, scaleY) * 0.95
+      const newOffsetX = (containerWidth - pageWidth * newScale) / 2
+      const newOffsetY = (containerHeight - pageHeight * newScale) / 2
+
+      setScale(newScale)
+      setRenderedScale(newScale)
+      setOffset({ x: newOffsetX, y: newOffsetY })
+    }
+  }, [drawing?.pdfUrl])
+
+  const dimensions = renderedPage
+    ? { width: renderedPage.canvas.width / renderedScale, height: renderedPage.canvas.height / renderedScale }
+    : { width: 800, height: 600 }
 
   // Load Drawing metadata from Supabase
   useEffect(() => {
@@ -112,8 +152,9 @@ export default function Quantificacao() {
 
     // Render scale 2.5 for crisp details
     const renderScale = 2.5
+    const targetScale = 2.5 * renderedScale
 
-    renderPdfPage(drawing.pdfUrl, 1, false)
+    renderPdfPage(drawing.pdfUrl, 1, false, targetScale)
       .then(async page => {
         if (!active) return
 
@@ -153,8 +194,95 @@ export default function Quantificacao() {
             }
           })
           setPdfTextItems(items)
+          // Load vector vertices for CAD snapping
+          try {
+            const ops = await pdfPage.getOperatorList()
+            const vertices: { x: number; y: number }[] = []
+            const OPS = (pdfjsLib as any).OPS || {}
+
+            for (let i = 0; i < ops.fnArray.length; i++) {
+              const fn = ops.fnArray[i]
+              const args = ops.argsArray[i]
+
+              if (fn === OPS.constructPath) {
+                const pathOps = args[0]
+                const pathArgs = args[1]
+                let argIdx = 0
+
+                for (const op of pathOps) {
+                  if (op === OPS.moveTo || op === OPS.lineTo) {
+                    const px = pathArgs[argIdx++]
+                    const py = pathArgs[argIdx++]
+                    const [vx, vy] = viewport.convertToViewportPoint(px, py)
+                    vertices.push({ x: vx, y: vy })
+                  } else if (op === OPS.curveTo) {
+                    argIdx += 4
+                    const px = pathArgs[argIdx++]
+                    const py = pathArgs[argIdx++]
+                    const [vx, vy] = viewport.convertToViewportPoint(px, py)
+                    vertices.push({ x: vx, y: vy })
+                  } else if (op === OPS.curveTo2 || op === OPS.curveTo3) {
+                    argIdx += 2
+                    const px = pathArgs[argIdx++]
+                    const py = pathArgs[argIdx++]
+                    const [vx, vy] = viewport.convertToViewportPoint(px, py)
+                    vertices.push({ x: vx, y: vy })
+                  } else if (op === OPS.rectangle) {
+                    const px = pathArgs[argIdx++]
+                    const py = pathArgs[argIdx++]
+                    const w = pathArgs[argIdx++]
+                    const h = pathArgs[argIdx++]
+                    const [c1x, c1y] = viewport.convertToViewportPoint(px, py)
+                    const [c2x, c2y] = viewport.convertToViewportPoint(px + w, py)
+                    const [c3x, c3y] = viewport.convertToViewportPoint(px + w, py + h)
+                    const [c4x, c4y] = viewport.convertToViewportPoint(px, py + h)
+                    vertices.push(
+                      { x: c1x, y: c1y },
+                      { x: c2x, y: c2y },
+                      { x: c3x, y: c3y },
+                      { x: c4x, y: c4y }
+                    )
+                  }
+                }
+              } else if (fn === OPS.moveTo || fn === OPS.lineTo) {
+                const px = args[0]
+                const py = args[1]
+                const [vx, vy] = viewport.convertToViewportPoint(px, py)
+                vertices.push({ x: vx, y: vy })
+              } else if (fn === OPS.rectangle) {
+                const px = args[0]
+                const py = args[1]
+                const w = args[2]
+                const h = args[3]
+                const [c1x, c1y] = viewport.convertToViewportPoint(px, py)
+                const [c2x, c2y] = viewport.convertToViewportPoint(px + w, py)
+                const [c3x, c3y] = viewport.convertToViewportPoint(px + w, py + h)
+                const [c4x, c4y] = viewport.convertToViewportPoint(px, py + h)
+                vertices.push(
+                  { x: c1x, y: c1y },
+                  { x: c2x, y: c2y },
+                  { x: c3x, y: c3y },
+                  { x: c4x, y: c4y }
+                )
+              }
+            }
+
+            // Deduplicate
+            const seen = new Set<string>()
+            const uniqueVertices: { x: number; y: number }[] = []
+            for (const v of vertices) {
+              const key = `${v.x.toFixed(1)},${v.y.toFixed(1)}`
+              if (!seen.has(key)) {
+                seen.add(key)
+                uniqueVertices.push(v)
+              }
+            }
+            setSnapPoints(uniqueVertices)
+          } catch (snapErr) {
+            console.warn('[Quantificacao] Failed to extract snap points:', snapErr)
+          }
         } catch (txtErr) {
-          console.warn('[Quantificacao] Failed to extract text content:', txtErr)
+          console.warn('[Quantificacao] Failed to extract text content/snap points:', txtErr)
         }
 
         setLoading(false)
@@ -170,7 +298,7 @@ export default function Quantificacao() {
     return () => {
       active = false
     }
-  }, [drawing])
+  }, [drawing, renderedScale])
 
   // Draw rendered page to canvas
   useEffect(() => {
@@ -281,7 +409,7 @@ export default function Quantificacao() {
     }
 
     if (e.button === 0 && renderedPage) {
-      const coords = getCanvasCoords(e)
+      const coords = (snapEnabled && activeSnapPoint) ? activeSnapPoint : getCanvasCoords(e)
 
       if (tool === 'calibrate') {
         if (tempCalibrationPoints.length < 2) {
@@ -308,8 +436,29 @@ export default function Quantificacao() {
         x: e.clientX - panStart.x,
         y: e.clientY - panStart.y,
       })
-    } else if (tool === 'text' && boxStart) {
-      const coords = getCanvasCoords(e)
+      return
+    }
+
+    const coords = getCanvasCoords(e)
+
+    // Calculate CAD snapping to vector endpoints
+    if (snapEnabled && snapPoints.length > 0 && (tool === 'linear' || tool === 'area' || tool === 'calibrate')) {
+      let closest: { x: number; y: number } | null = null
+      let minDist = 15 // 15px attraction threshold
+
+      for (const p of snapPoints) {
+        const d = Math.hypot(p.x - coords.x, p.y - coords.y)
+        if (d < minDist) {
+          minDist = d
+          closest = p
+        }
+      }
+      setActiveSnapPoint(closest)
+    } else {
+      setActiveSnapPoint(null)
+    }
+
+    if (tool === 'text' && boxStart) {
       setBoxCurrent(coords)
     }
   }
@@ -588,6 +737,19 @@ export default function Quantificacao() {
           >
             <Type size={14} /> Mapear Textos
           </button>
+          
+          <div className="h-4 w-px bg-slate-800 self-center mx-1" />
+          
+          <button
+            onClick={() => { setSnapEnabled(!snapEnabled); setActiveSnapPoint(null) }}
+            className={`p-1.5 rounded transition-all text-xs font-semibold flex items-center gap-1 cursor-pointer ${
+              snapEnabled ? 'bg-[#22C55E]/20 text-[#22C55E] border border-[#22C55E]/40' : 'hover:bg-white/10'
+            }`}
+            style={{ color: snapEnabled ? '#22C55E' : 'var(--slate)' }}
+            title="Snap CAD (Atrair para vértices de linhas do desenho)"
+          >
+            <Magnet size={14} /> Snap {snapEnabled ? 'Ativo' : 'Inativo'}
+          </button>
         </div>
 
         <Button variant="ghost" size="sm" onClick={handleClearAll} style={{ color: '#EF4444' }}>
@@ -624,8 +786,8 @@ export default function Quantificacao() {
               ref={containerRef}
               className="absolute origin-top-left"
               style={{
-                width: `${renderedPage.canvas.width}px`,
-                height: `${renderedPage.canvas.height}px`,
+                width: `${dimensions.width}px`,
+                height: `${dimensions.height}px`,
                 transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})`,
                 transition: isPanning ? 'none' : 'transform 0.08s ease-out',
               }}
@@ -635,6 +797,27 @@ export default function Quantificacao() {
 
               {/* SVG vector measurement overlays */}
               <svg className="absolute inset-0 w-full h-full pointer-events-none z-10">
+                {/* Visual Snap Cursor Indicator (Green CAD target square) */}
+                {snapEnabled && activeSnapPoint && (
+                  <g>
+                    <rect
+                      x={activeSnapPoint.x - 5}
+                      y={activeSnapPoint.y - 5}
+                      width="10"
+                      height="10"
+                      fill="none"
+                      stroke="#22C55E"
+                      strokeWidth="2"
+                    />
+                    <circle
+                      cx={activeSnapPoint.x}
+                      cy={activeSnapPoint.y}
+                      r="1.5"
+                      fill="#22C55E"
+                    />
+                  </g>
+                )}
+
                 {/* 1. Scale Calibration lines */}
                 {calibration && (
                   <>
