@@ -272,63 +272,110 @@ export default function Quantificacao() {
                   CTM[1] * t[4] + CTM[3] * t[5] + CTM[5]
                 ]
               } else if (fn === OPS.constructPath) {
-                const pathOps = args[0]
-                const pathArgs = args[1]
-                let argIdx = 0
-                let subPathStart: { x: number; y: number } | null = null
+                // Support both legacy array format and modern typed array buffer format of pdfjs v4+
+                const isModernFormat = typeof args[0] === 'number'
+                if (isModernFormat) {
+                  const buffer = args[1]?.[0]
+                  if (buffer) {
+                    let k = 0
+                    const kk = buffer.length
+                    let subPathStart: { x: number; y: number } | null = null
 
-                for (const op of pathOps) {
-                  if (op === OPS.moveTo) {
-                    const px = pathArgs[argIdx++]
-                    const py = pathArgs[argIdx++]
-                    const pt = applyCtmAndViewport(px, py)
-                    vertices.push(pt)
-                    lastViewportPt = pt
-                    subPathStart = pt
-                  } else if (op === OPS.lineTo) {
-                    const px = pathArgs[argIdx++]
-                    const py = pathArgs[argIdx++]
-                    const pt = applyCtmAndViewport(px, py)
-                    addVertexAndMidpoint(pt)
-                  } else if (op === OPS.curveTo) {
-                    argIdx += 4
-                    const px = pathArgs[argIdx++]
-                    const py = pathArgs[argIdx++]
-                    const pt = applyCtmAndViewport(px, py)
-                    addVertexAndMidpoint(pt)
-                  } else if (op === OPS.curveTo2 || op === OPS.curveTo3) {
-                    argIdx += 2
-                    const px = pathArgs[argIdx++]
-                    const py = pathArgs[argIdx++]
-                    const pt = applyCtmAndViewport(px, py)
-                    addVertexAndMidpoint(pt)
-                  } else if (op === OPS.rectangle) {
-                    const px = pathArgs[argIdx++]
-                    const py = pathArgs[argIdx++]
-                    const w = pathArgs[argIdx++]
-                    const h = pathArgs[argIdx++]
-                    const corners = [
-                      applyCtmAndViewport(px, py),
-                      applyCtmAndViewport(px + w, py),
-                      applyCtmAndViewport(px + w, py + h),
-                      applyCtmAndViewport(px, py + h)
-                    ]
-                    for (const c of corners) vertices.push(c)
-                    // Midpoints of rectangle edges
-                    for (let ci = 0; ci < corners.length; ci++) {
-                      const next = corners[(ci + 1) % corners.length]
-                      midpoints.push({
-                        x: (corners[ci].x + next.x) / 2,
-                        y: (corners[ci].y + next.y) / 2
-                      })
+                    while (k < kk) {
+                      const op = buffer[k++]
+                      if (op === 0) { // DrawOPS.moveTo
+                        const px = buffer[k++]
+                        const py = buffer[k++]
+                        const pt = applyCtmAndViewport(px, py)
+                        vertices.push(pt)
+                        lastViewportPt = pt
+                        subPathStart = pt
+                      } else if (op === 1) { // DrawOPS.lineTo
+                        const px = buffer[k++]
+                        const py = buffer[k++]
+                        const pt = applyCtmAndViewport(px, py)
+                        addVertexAndMidpoint(pt)
+                      } else if (op === 2) { // DrawOPS.curveTo
+                        k += 4 // Skip control points
+                        const px = buffer[k++]
+                        const py = buffer[k++]
+                        const pt = applyCtmAndViewport(px, py)
+                        addVertexAndMidpoint(pt)
+                      } else if (op === 3) { // DrawOPS.quadraticCurveTo
+                        k += 2 // Skip control point
+                        const px = buffer[k++]
+                        const py = buffer[k++]
+                        const pt = applyCtmAndViewport(px, py)
+                        addVertexAndMidpoint(pt)
+                      } else if (op === 4) { // DrawOPS.closePath
+                        if (subPathStart && lastViewportPt) {
+                          midpoints.push({
+                            x: (lastViewportPt.x + subPathStart.x) / 2,
+                            y: (lastViewportPt.y + subPathStart.y) / 2
+                          })
+                          lastViewportPt = subPathStart
+                        }
+                      }
                     }
-                  } else if (op === OPS.closePath && subPathStart && lastViewportPt) {
-                    // Add midpoint of closing segment
-                    midpoints.push({
-                      x: (lastViewportPt.x + subPathStart.x) / 2,
-                      y: (lastViewportPt.y + subPathStart.y) / 2
-                    })
-                    lastViewportPt = subPathStart
+                  }
+                } else {
+                  // Legacy pdfjs format
+                  const pathOps = args[0]
+                  const pathArgs = args[1]
+                  let argIdx = 0
+                  let subPathStart: { x: number; y: number } | null = null
+
+                  for (const op of pathOps) {
+                    if (op === OPS.moveTo) {
+                      const px = pathArgs[argIdx++]
+                      const py = pathArgs[argIdx++]
+                      const pt = applyCtmAndViewport(px, py)
+                      vertices.push(pt)
+                      lastViewportPt = pt
+                      subPathStart = pt
+                    } else if (op === OPS.lineTo) {
+                      const px = pathArgs[argIdx++]
+                      const py = pathArgs[argIdx++]
+                      const pt = applyCtmAndViewport(px, py)
+                      addVertexAndMidpoint(pt)
+                    } else if (op === OPS.curveTo) {
+                      argIdx += 4
+                      const px = pathArgs[argIdx++]
+                      const py = pathArgs[argIdx++]
+                      const pt = applyCtmAndViewport(px, py)
+                      addVertexAndMidpoint(pt)
+                    } else if (op === OPS.curveTo2 || op === OPS.curveTo3) {
+                      argIdx += 2
+                      const px = pathArgs[argIdx++]
+                      const py = pathArgs[argIdx++]
+                      const pt = applyCtmAndViewport(px, py)
+                      addVertexAndMidpoint(pt)
+                    } else if (op === OPS.rectangle) {
+                      const px = pathArgs[argIdx++]
+                      const py = pathArgs[argIdx++]
+                      const w = pathArgs[argIdx++]
+                      const h = pathArgs[argIdx++]
+                      const corners = [
+                        applyCtmAndViewport(px, py),
+                        applyCtmAndViewport(px + w, py),
+                        applyCtmAndViewport(px + w, py + h),
+                        applyCtmAndViewport(px, py + h)
+                      ]
+                      for (const c of corners) vertices.push(c)
+                      for (let ci = 0; ci < corners.length; ci++) {
+                        const next = corners[(ci + 1) % corners.length]
+                        midpoints.push({
+                          x: (corners[ci].x + next.x) / 2,
+                          y: (corners[ci].y + next.y) / 2
+                        })
+                      }
+                    } else if (op === OPS.closePath && subPathStart && lastViewportPt) {
+                      midpoints.push({
+                        x: (lastViewportPt.x + subPathStart.x) / 2,
+                        y: (lastViewportPt.y + subPathStart.y) / 2
+                      })
+                      lastViewportPt = subPathStart
+                    }
                   }
                 }
               } else if (fn === OPS.moveTo || fn === OPS.lineTo) {
