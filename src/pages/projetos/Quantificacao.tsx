@@ -200,11 +200,28 @@ export default function Quantificacao() {
             const vertices: { x: number; y: number }[] = []
             const OPS = (pdfjsLib as any).OPS || {}
 
+            let CTM = [1, 0, 0, 1, 0, 0]
+            const CTMStack: number[][] = []
+
             for (let i = 0; i < ops.fnArray.length; i++) {
               const fn = ops.fnArray[i]
               const args = ops.argsArray[i]
 
-              if (fn === OPS.constructPath) {
+              if (fn === OPS.save) {
+                CTMStack.push([...CTM])
+              } else if (fn === OPS.restore) {
+                CTM = CTMStack.pop() || [1, 0, 0, 1, 0, 0]
+              } else if (fn === OPS.transform) {
+                const t = args // [a, b, c, d, e, f]
+                CTM = [
+                  CTM[0] * t[0] + CTM[2] * t[1],
+                  CTM[1] * t[0] + CTM[3] * t[1],
+                  CTM[0] * t[2] + CTM[2] * t[3],
+                  CTM[1] * t[2] + CTM[3] * t[3],
+                  CTM[0] * t[4] + CTM[2] * t[5] + CTM[4],
+                  CTM[1] * t[4] + CTM[3] * t[5] + CTM[5]
+                ]
+              } else if (fn === OPS.constructPath) {
                 const pathOps = args[0]
                 const pathArgs = args[1]
                 let argIdx = 0
@@ -213,57 +230,69 @@ export default function Quantificacao() {
                   if (op === OPS.moveTo || op === OPS.lineTo) {
                     const px = pathArgs[argIdx++]
                     const py = pathArgs[argIdx++]
-                    const [vx, vy] = viewport.convertToViewportPoint(px, py)
+                    const tx = CTM[0] * px + CTM[2] * py + CTM[4]
+                    const ty = CTM[1] * px + CTM[3] * py + CTM[5]
+                    const [vx, vy] = viewport.convertToViewportPoint(tx, ty)
                     vertices.push({ x: vx, y: vy })
                   } else if (op === OPS.curveTo) {
                     argIdx += 4
                     const px = pathArgs[argIdx++]
                     const py = pathArgs[argIdx++]
-                    const [vx, vy] = viewport.convertToViewportPoint(px, py)
+                    const tx = CTM[0] * px + CTM[2] * py + CTM[4]
+                    const ty = CTM[1] * px + CTM[3] * py + CTM[5]
+                    const [vx, vy] = viewport.convertToViewportPoint(tx, ty)
                     vertices.push({ x: vx, y: vy })
                   } else if (op === OPS.curveTo2 || op === OPS.curveTo3) {
                     argIdx += 2
                     const px = pathArgs[argIdx++]
                     const py = pathArgs[argIdx++]
-                    const [vx, vy] = viewport.convertToViewportPoint(px, py)
+                    const tx = CTM[0] * px + CTM[2] * py + CTM[4]
+                    const ty = CTM[1] * px + CTM[3] * py + CTM[5]
+                    const [vx, vy] = viewport.convertToViewportPoint(tx, ty)
                     vertices.push({ x: vx, y: vy })
                   } else if (op === OPS.rectangle) {
                     const px = pathArgs[argIdx++]
                     const py = pathArgs[argIdx++]
                     const w = pathArgs[argIdx++]
                     const h = pathArgs[argIdx++]
-                    const [c1x, c1y] = viewport.convertToViewportPoint(px, py)
-                    const [c2x, c2y] = viewport.convertToViewportPoint(px + w, py)
-                    const [c3x, c3y] = viewport.convertToViewportPoint(px + w, py + h)
-                    const [c4x, c4y] = viewport.convertToViewportPoint(px, py + h)
-                    vertices.push(
-                      { x: c1x, y: c1y },
-                      { x: c2x, y: c2y },
-                      { x: c3x, y: c3y },
-                      { x: c4x, y: c4y }
-                    )
+                    const corners = [
+                      { x: px, y: py },
+                      { x: px + w, y: py },
+                      { x: px + w, y: py + h },
+                      { x: px, y: py + h }
+                    ]
+                    for (const pt of corners) {
+                      const tx = CTM[0] * pt.x + CTM[2] * pt.y + CTM[4]
+                      const ty = CTM[1] * pt.x + CTM[3] * pt.y + CTM[5]
+                      const [vx, vy] = viewport.convertToViewportPoint(tx, ty)
+                      vertices.push({ x: vx, y: vy })
+                    }
                   }
                 }
               } else if (fn === OPS.moveTo || fn === OPS.lineTo) {
                 const px = args[0]
                 const py = args[1]
-                const [vx, vy] = viewport.convertToViewportPoint(px, py)
+                const tx = CTM[0] * px + CTM[2] * py + CTM[4]
+                const ty = CTM[1] * px + CTM[3] * py + CTM[5]
+                const [vx, vy] = viewport.convertToViewportPoint(tx, ty)
                 vertices.push({ x: vx, y: vy })
               } else if (fn === OPS.rectangle) {
                 const px = args[0]
                 const py = args[1]
                 const w = args[2]
                 const h = args[3]
-                const [c1x, c1y] = viewport.convertToViewportPoint(px, py)
-                const [c2x, c2y] = viewport.convertToViewportPoint(px + w, py)
-                const [c3x, c3y] = viewport.convertToViewportPoint(px + w, py + h)
-                const [c4x, c4y] = viewport.convertToViewportPoint(px, py + h)
-                vertices.push(
-                  { x: c1x, y: c1y },
-                  { x: c2x, y: c2y },
-                  { x: c3x, y: c3y },
-                  { x: c4x, y: c4y }
-                )
+                const corners = [
+                  { x: px, y: py },
+                  { x: px + w, y: py },
+                  { x: px + w, y: py + h },
+                  { x: px, y: py + h }
+                ]
+                for (const pt of corners) {
+                  const tx = CTM[0] * pt.x + CTM[2] * pt.y + CTM[4]
+                  const ty = CTM[1] * pt.x + CTM[3] * pt.y + CTM[5]
+                  const [vx, vy] = viewport.convertToViewportPoint(tx, ty)
+                  vertices.push({ x: vx, y: vy })
+                }
               }
             }
 

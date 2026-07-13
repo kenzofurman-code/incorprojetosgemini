@@ -1176,6 +1176,113 @@ export default function Revisao({ viewOnly = false }: { viewOnly?: boolean }) {
                         strokeLinejoin="round"
                       />
                     )}
+
+                    {/* Render active pending markup preview (while typing title/desc before saving) */}
+                    {addingIssue && pendingMarkup && (() => {
+                      const color = pendingMarkup.color || markupColor
+                      const fillOpacity = pendingMarkup.fillOpacity != null ? pendingMarkup.fillOpacity / 100 : 0
+                      const strokeWidth = pendingMarkup.strokeWidth || 3
+                      const strokeDasharray = pendingMarkup.strokeDasharray || undefined
+
+                      if (pendingMarkup.type === 'rect' && pendingMarkup.w && pendingMarkup.h) {
+                        return (
+                          <rect
+                            x={`${pendingMarkup.x}%`}
+                            y={`${pendingMarkup.y}%`}
+                            width={`${pendingMarkup.w}%`}
+                            height={`${pendingMarkup.h}%`}
+                            fill={fillOpacity > 0 ? color : 'none'}
+                            fillOpacity={fillOpacity}
+                            stroke={color}
+                            strokeWidth={strokeWidth}
+                            strokeDasharray={strokeDasharray}
+                          />
+                        )
+                      }
+                      if (pendingMarkup.type === 'cloud' && pendingMarkup.w && pendingMarkup.h) {
+                        const pathData = getCloudPath(pendingMarkup.x, pendingMarkup.y, pendingMarkup.w, pendingMarkup.h, dimensions.width, dimensions.height)
+                        return (
+                          <path
+                            d={pathData}
+                            fill={fillOpacity > 0 ? color : 'none'}
+                            fillOpacity={fillOpacity}
+                            stroke={color}
+                            strokeWidth={strokeWidth}
+                          />
+                        )
+                      }
+                      if (pendingMarkup.type === 'arrow' && pendingMarkup.w != null && pendingMarkup.h != null) {
+                        const x1 = (pendingMarkup.x / 100) * dimensions.width
+                        const y1 = (pendingMarkup.y / 100) * dimensions.height
+                        const x2 = ((pendingMarkup.x + pendingMarkup.w) / 100) * dimensions.width
+                        const y2 = ((pendingMarkup.y + pendingMarkup.h) / 100) * dimensions.height
+                        const angle = Math.atan2(y2 - y1, x2 - x1)
+                        const arrowLength = 12
+                        const h1x = x2 - arrowLength * Math.cos(angle - Math.PI / 6)
+                        const h1y = y2 - arrowLength * Math.sin(angle - Math.PI / 6)
+                        const h2x = x2 - arrowLength * Math.cos(angle + Math.PI / 6)
+                        const h2y = y2 - arrowLength * Math.sin(angle + Math.PI / 6)
+                        return (
+                          <g>
+                            <line
+                              x1={x1}
+                              y1={y1}
+                              x2={x2}
+                              y2={y2}
+                              stroke={color}
+                              strokeWidth={strokeWidth}
+                              strokeDasharray={strokeDasharray}
+                            />
+                            <polygon
+                              points={`${x2},${y2} ${h1x},${h1y} ${h2x},${h2y}`}
+                              fill={color}
+                            />
+                          </g>
+                        )
+                      }
+                      if (pendingMarkup.type === 'polygon' && pendingMarkup.points) {
+                        const ptsStr = pendingMarkup.points.map((p: { x: number; y: number }) => `${(p.x / 100) * dimensions.width},${(p.y / 100) * dimensions.height}`).join(' ')
+                        return (
+                          <polygon
+                            points={ptsStr}
+                            fill={fillOpacity > 0 ? color : 'none'}
+                            fillOpacity={fillOpacity}
+                            stroke={color}
+                            strokeWidth={strokeWidth}
+                          />
+                        )
+                      }
+                      if (pendingMarkup.type === 'scribble' && pendingMarkup.points) {
+                        const pathData = pendingMarkup.points.map((p: { x: number; y: number }, i: number) =>
+                          `${i === 0 ? 'M' : 'L'} ${(p.x / 100) * dimensions.width} ${(p.y / 100) * dimensions.height}`
+                        ).join(' ')
+                        return (
+                          <path
+                            d={pathData}
+                            fill="none"
+                            stroke={color}
+                            strokeWidth={strokeWidth}
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          />
+                        )
+                      }
+                      if (pendingMarkup.type === 'text' && pendingMarkup.text) {
+                        return (
+                          <text
+                            x={`${pendingMarkup.x}%`}
+                            y={`${pendingMarkup.y}%`}
+                            fill={color}
+                            fontSize={`${pendingMarkup.fontSize || 14}px`}
+                            fontWeight="bold"
+                            dominantBaseline="middle"
+                          >
+                            {pendingMarkup.text}
+                          </text>
+                        )
+                      }
+                      return null
+                    })()}
                   </svg>
 
                   {/* HTML Pin Overlay Wrapper */}
