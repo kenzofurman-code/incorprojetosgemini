@@ -199,6 +199,7 @@ export default function Quantificacao() {
           try {
             const ops = await pdfPage.getOperatorList()
             const vertices: { x: number; y: number }[] = []
+            const midpoints: { x: number; y: number }[] = []
             // Define operator codes directly to be fully bundle-proof
             const OPS = {
               save: 10,
@@ -214,8 +215,34 @@ export default function Quantificacao() {
               constructPath: 91
             }
 
+            // Debug: count operator types
+            const opCounts: Record<number, number> = {}
+            for (let i = 0; i < ops.fnArray.length; i++) {
+              opCounts[ops.fnArray[i]] = (opCounts[ops.fnArray[i]] || 0) + 1
+            }
+            console.log('[Snap Debug] Total operators:', ops.fnArray.length, 'Types:', opCounts)
+
             let CTM = [1, 0, 0, 1, 0, 0]
             const CTMStack: number[][] = []
+            let lastViewportPt: { x: number; y: number } | null = null
+
+            const applyCtmAndViewport = (px: number, py: number) => {
+              const tx = CTM[0] * px + CTM[2] * py + CTM[4]
+              const ty = CTM[1] * px + CTM[3] * py + CTM[5]
+              const [vx, vy] = viewport.convertToViewportPoint(tx, ty)
+              return { x: vx, y: vy }
+            }
+
+            const addVertexAndMidpoint = (pt: { x: number; y: number }) => {
+              vertices.push(pt)
+              if (lastViewportPt) {
+                midpoints.push({
+                  x: (lastViewportPt.x + pt.x) / 2,
+                  y: (lastViewportPt.y + pt.y) / 2
+                })
+              }
+              lastViewportPt = pt
+            }
 
             for (let i = 0; i < ops.fnArray.length; i++) {
               const fn = ops.fnArray[i]
@@ -239,86 +266,112 @@ export default function Quantificacao() {
                 const pathOps = args[0]
                 const pathArgs = args[1]
                 let argIdx = 0
+                let subPathStart: { x: number; y: number } | null = null
 
                 for (const op of pathOps) {
-                  if (op === OPS.moveTo || op === OPS.lineTo) {
+                  if (op === OPS.moveTo) {
                     const px = pathArgs[argIdx++]
                     const py = pathArgs[argIdx++]
-                    const tx = CTM[0] * px + CTM[2] * py + CTM[4]
-                    const ty = CTM[1] * px + CTM[3] * py + CTM[5]
-                    const [vx, vy] = viewport.convertToViewportPoint(tx, ty)
-                    vertices.push({ x: vx, y: vy })
+                    const pt = applyCtmAndViewport(px, py)
+                    vertices.push(pt)
+                    lastViewportPt = pt
+                    subPathStart = pt
+                  } else if (op === OPS.lineTo) {
+                    const px = pathArgs[argIdx++]
+                    const py = pathArgs[argIdx++]
+                    const pt = applyCtmAndViewport(px, py)
+                    addVertexAndMidpoint(pt)
                   } else if (op === OPS.curveTo) {
                     argIdx += 4
                     const px = pathArgs[argIdx++]
                     const py = pathArgs[argIdx++]
-                    const tx = CTM[0] * px + CTM[2] * py + CTM[4]
-                    const ty = CTM[1] * px + CTM[3] * py + CTM[5]
-                    const [vx, vy] = viewport.convertToViewportPoint(tx, ty)
-                    vertices.push({ x: vx, y: vy })
+                    const pt = applyCtmAndViewport(px, py)
+                    addVertexAndMidpoint(pt)
                   } else if (op === OPS.curveTo2 || op === OPS.curveTo3) {
                     argIdx += 2
                     const px = pathArgs[argIdx++]
                     const py = pathArgs[argIdx++]
-                    const tx = CTM[0] * px + CTM[2] * py + CTM[4]
-                    const ty = CTM[1] * px + CTM[3] * py + CTM[5]
-                    const [vx, vy] = viewport.convertToViewportPoint(tx, ty)
-                    vertices.push({ x: vx, y: vy })
+                    const pt = applyCtmAndViewport(px, py)
+                    addVertexAndMidpoint(pt)
                   } else if (op === OPS.rectangle) {
                     const px = pathArgs[argIdx++]
                     const py = pathArgs[argIdx++]
                     const w = pathArgs[argIdx++]
                     const h = pathArgs[argIdx++]
                     const corners = [
-                      { x: px, y: py },
-                      { x: px + w, y: py },
-                      { x: px + w, y: py + h },
-                      { x: px, y: py + h }
+                      applyCtmAndViewport(px, py),
+                      applyCtmAndViewport(px + w, py),
+                      applyCtmAndViewport(px + w, py + h),
+                      applyCtmAndViewport(px, py + h)
                     ]
-                    for (const pt of corners) {
-                      const tx = CTM[0] * pt.x + CTM[2] * pt.y + CTM[4]
-                      const ty = CTM[1] * pt.x + CTM[3] * pt.y + CTM[5]
-                      const [vx, vy] = viewport.convertToViewportPoint(tx, ty)
-                      vertices.push({ x: vx, y: vy })
+                    for (const c of corners) vertices.push(c)
+                    // Midpoints of rectangle edges
+                    for (let ci = 0; ci < corners.length; ci++) {
+                      const next = corners[(ci + 1) % corners.length]
+                      midpoints.push({
+                        x: (corners[ci].x + next.x) / 2,
+                        y: (corners[ci].y + next.y) / 2
+                      })
                     }
+                  } else if (op === OPS.closePath && subPathStart && lastViewportPt) {
+                    // Add midpoint of closing segment
+                    midpoints.push({
+                      x: (lastViewportPt.x + subPathStart.x) / 2,
+                      y: (lastViewportPt.y + subPathStart.y) / 2
+                    })
+                    lastViewportPt = subPathStart
                   }
                 }
               } else if (fn === OPS.moveTo || fn === OPS.lineTo) {
                 const px = args[0]
                 const py = args[1]
-                const tx = CTM[0] * px + CTM[2] * py + CTM[4]
-                const ty = CTM[1] * px + CTM[3] * py + CTM[5]
-                const [vx, vy] = viewport.convertToViewportPoint(tx, ty)
-                vertices.push({ x: vx, y: vy })
+                const pt = applyCtmAndViewport(px, py)
+                if (fn === OPS.moveTo) {
+                  vertices.push(pt)
+                  lastViewportPt = pt
+                } else {
+                  addVertexAndMidpoint(pt)
+                }
               } else if (fn === OPS.rectangle) {
                 const px = args[0]
                 const py = args[1]
                 const w = args[2]
                 const h = args[3]
                 const corners = [
-                  { x: px, y: py },
-                  { x: px + w, y: py },
-                  { x: px + w, y: py + h },
-                  { x: px, y: py + h }
+                  applyCtmAndViewport(px, py),
+                  applyCtmAndViewport(px + w, py),
+                  applyCtmAndViewport(px + w, py + h),
+                  applyCtmAndViewport(px, py + h)
                 ]
-                for (const pt of corners) {
-                  const tx = CTM[0] * pt.x + CTM[2] * pt.y + CTM[4]
-                  const ty = CTM[1] * pt.x + CTM[3] * pt.y + CTM[5]
-                  const [vx, vy] = viewport.convertToViewportPoint(tx, ty)
-                  vertices.push({ x: vx, y: vy })
+                for (const c of corners) vertices.push(c)
+                for (let ci = 0; ci < corners.length; ci++) {
+                  const next = corners[(ci + 1) % corners.length]
+                  midpoints.push({
+                    x: (corners[ci].x + next.x) / 2,
+                    y: (corners[ci].y + next.y) / 2
+                  })
                 }
               }
             }
 
-            // Deduplicate
+            // Combine endpoints + midpoints and deduplicate
+            const allPoints = [...vertices, ...midpoints]
             const seen = new Set<string>()
             const uniqueVertices: { x: number; y: number }[] = []
-            for (const v of vertices) {
+            for (const v of allPoints) {
               const key = `${v.x.toFixed(1)},${v.y.toFixed(1)}`
               if (!seen.has(key)) {
                 seen.add(key)
                 uniqueVertices.push(v)
               }
+            }
+            console.log('[Snap Debug] Extracted', vertices.length, 'endpoints +', midpoints.length, 'midpoints =', uniqueVertices.length, 'unique snap points')
+            console.log('[Snap Debug] Viewport size:', viewport.width.toFixed(0), 'x', viewport.height.toFixed(0))
+            if (uniqueVertices.length > 0) {
+              const xs = uniqueVertices.map(v => v.x)
+              const ys = uniqueVertices.map(v => v.y)
+              console.log('[Snap Debug] X range:', Math.min(...xs).toFixed(1), 'to', Math.max(...xs).toFixed(1))
+              console.log('[Snap Debug] Y range:', Math.min(...ys).toFixed(1), 'to', Math.max(...ys).toFixed(1))
             }
             setSnapPoints(uniqueVertices)
           } catch (snapErr) {
@@ -792,7 +845,7 @@ export default function Quantificacao() {
             style={{ color: snapEnabled ? '#22C55E' : 'var(--slate)' }}
             title="Snap CAD (Atrair para vértices de linhas do desenho)"
           >
-            <Magnet size={14} /> Snap {snapEnabled ? 'Ativo' : 'Inativo'}
+            <Magnet size={14} /> Snap {snapEnabled ? 'Ativo' : 'Inativo'} ({snapPoints.length})
           </button>
         </div>
 
@@ -865,6 +918,18 @@ export default function Quantificacao() {
                     />
                   </g>
                 )}
+
+                {/* DEBUG: Show all snap points as small dots */}
+                {snapEnabled && snapPoints.length > 0 && snapPoints.map((sp, idx) => (
+                  <circle
+                    key={idx}
+                    cx={sp.x}
+                    cy={sp.y}
+                    r={2 / scale}
+                    fill="#FF6600"
+                    opacity={0.5}
+                  />
+                ))}
 
                 {/* Rubber-band previews for interactive drawings */}
                 {(() => {
