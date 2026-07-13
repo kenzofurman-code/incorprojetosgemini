@@ -97,6 +97,7 @@ export default function Quantificacao() {
   const [activeSnapPoint, setActiveSnapPoint] = useState<{ x: number; y: number } | null>(null)
   const [snapEnabled, setSnapEnabled] = useState(true)
   const [mousePos, setMousePos] = useState<{ x: number; y: number } | null>(null)
+  const [snapDebug, setSnapDebug] = useState('')
 
   // Debounce scale updates to avoid lagging during zoom wheel
   useEffect(() => {
@@ -161,12 +162,14 @@ export default function Quantificacao() {
 
         setRenderedPage(page)
 
-        // Load texts
+        // Load texts and snap points independently
+        let pdfPage: any = null
+        let viewport: any = null
         try {
           const loadingTask = pdfjsLib.getDocument({ url: drawing.pdfUrl! })
           const pdfDoc = await loadingTask.promise
-          const pdfPage = await pdfDoc.getPage(1)
-          const viewport = pdfPage.getViewport({ scale: renderScale })
+          pdfPage = await pdfDoc.getPage(1)
+          viewport = pdfPage.getViewport({ scale: renderScale })
           const textContent = await pdfPage.getTextContent()
 
           const items: ExtractedTextItem[] = textContent.items.map((item: any) => {
@@ -189,13 +192,19 @@ export default function Quantificacao() {
             return {
               str: item.str,
               x: transform[4],
-              y: transform[5] - h, // Shift to top-left
+              y: transform[5] - h,
               width: item.width * renderScale,
               height: h
             }
           })
           setPdfTextItems(items)
-          // Load vector vertices for CAD snapping
+        } catch (txtErr: any) {
+          console.warn('[Quantificacao] Text extraction error:', txtErr)
+          setSnapDebug(prev => prev + ' | TextErr: ' + txtErr?.message)
+        }
+
+        // Load vector vertices for CAD snapping (runs independently of text extraction)
+        if (pdfPage && viewport) {
           try {
             const ops = await pdfPage.getOperatorList()
             const vertices: { x: number; y: number }[] = []
@@ -373,12 +382,14 @@ export default function Quantificacao() {
               console.log('[Snap Debug] X range:', Math.min(...xs).toFixed(1), 'to', Math.max(...xs).toFixed(1))
               console.log('[Snap Debug] Y range:', Math.min(...ys).toFixed(1), 'to', Math.max(...ys).toFixed(1))
             }
+            setSnapDebug(`Ops: ${ops.fnArray.length} | Endpoints: ${vertices.length} | Mids: ${midpoints.length} | Unique: ${uniqueVertices.length}`)
             setSnapPoints(uniqueVertices)
-          } catch (snapErr) {
+          } catch (snapErr: any) {
             console.warn('[Quantificacao] Failed to extract snap points:', snapErr)
+            setSnapDebug('SNAP ERROR: ' + snapErr?.message)
           }
-        } catch (txtErr) {
-          console.warn('[Quantificacao] Failed to extract text content/snap points:', txtErr)
+        } else {
+          setSnapDebug('PDF page not loaded - cannot extract snap points')
         }
 
         setLoading(false)
@@ -847,6 +858,9 @@ export default function Quantificacao() {
           >
             <Magnet size={14} /> Snap {snapEnabled ? 'Ativo' : 'Inativo'} ({snapPoints.length})
           </button>
+          {snapDebug && (
+            <span className="text-[10px] text-orange-400 max-w-[300px] truncate" title={snapDebug}>{snapDebug}</span>
+          )}
         </div>
 
         <Button variant="ghost" size="sm" onClick={handleClearAll} style={{ color: '#EF4444' }}>
