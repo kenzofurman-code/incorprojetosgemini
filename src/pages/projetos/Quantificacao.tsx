@@ -96,6 +96,7 @@ export default function Quantificacao() {
   const [snapPoints, setSnapPoints] = useState<{ x: number; y: number }[]>([])
   const [activeSnapPoint, setActiveSnapPoint] = useState<{ x: number; y: number } | null>(null)
   const [snapEnabled, setSnapEnabled] = useState(true)
+  const [mousePos, setMousePos] = useState<{ x: number; y: number } | null>(null)
 
   // Debounce scale updates to avoid lagging during zoom wheel
   useEffect(() => {
@@ -469,11 +470,12 @@ export default function Quantificacao() {
     }
 
     const coords = getCanvasCoords(e)
+    setMousePos(coords)
 
     // Calculate CAD snapping to vector endpoints
     if (snapEnabled && snapPoints.length > 0 && (tool === 'linear' || tool === 'area' || tool === 'calibrate')) {
       let closest: { x: number; y: number } | null = null
-      let minDist = 15 // 15px attraction threshold
+      let minDist = 15 / scale // Screen-space threshold (15 screen pixels)
 
       for (const p of snapPoints) {
         const d = Math.hypot(p.x - coords.x, p.y - coords.y)
@@ -798,7 +800,11 @@ export default function Quantificacao() {
           onMouseDown={handleMouseDown}
           onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp}
-          onMouseLeave={handleMouseUp}
+          onMouseLeave={(e) => {
+            handleMouseUp(e)
+            setActiveSnapPoint(null)
+            setMousePos(null)
+          }}
           onDoubleClick={handleDoubleClick}
           onWheel={handleWheel}
           onContextMenu={(e) => e.preventDefault()}
@@ -826,26 +832,86 @@ export default function Quantificacao() {
 
               {/* SVG vector measurement overlays */}
               <svg className="absolute inset-0 w-full h-full pointer-events-none z-10">
-                {/* Visual Snap Cursor Indicator (Green CAD target square) */}
+                {/* Visual Snap Cursor Indicator (Green CAD target square scaled for constant screen size) */}
                 {snapEnabled && activeSnapPoint && (
                   <g>
                     <rect
-                      x={activeSnapPoint.x - 5}
-                      y={activeSnapPoint.y - 5}
-                      width="10"
-                      height="10"
+                      x={activeSnapPoint.x - 6 / scale}
+                      y={activeSnapPoint.y - 6 / scale}
+                      width={12 / scale}
+                      height={12 / scale}
                       fill="none"
                       stroke="#22C55E"
-                      strokeWidth="2"
+                      strokeWidth={2 / scale}
                     />
                     <circle
                       cx={activeSnapPoint.x}
                       cy={activeSnapPoint.y}
-                      r="1.5"
+                      r={1.5 / scale}
                       fill="#22C55E"
                     />
                   </g>
                 )}
+
+                {/* Rubber-band previews for interactive drawings */}
+                {(() => {
+                  const currentInteractivePt = (snapEnabled && activeSnapPoint) ? activeSnapPoint : mousePos
+                  if (!currentInteractivePt) return null
+                  return (
+                    <>
+                      {/* Temp calibration line rubber-band preview */}
+                      {tool === 'calibrate' && tempCalibrationPoints.length === 1 && (
+                        <line
+                          x1={tempCalibrationPoints[0].x}
+                          y1={tempCalibrationPoints[0].y}
+                          x2={currentInteractivePt.x}
+                          y2={currentInteractivePt.y}
+                          stroke="#EF4444"
+                          strokeWidth={2 / scale}
+                          strokeDasharray={`${4 / scale} ${4 / scale}`}
+                        />
+                      )}
+                      {/* Linear path drawing rubber-band preview */}
+                      {tool === 'linear' && activeLinePoints.length > 0 && (
+                        <line
+                          x1={activeLinePoints[activeLinePoints.length - 1].x}
+                          y1={activeLinePoints[activeLinePoints.length - 1].y}
+                          x2={currentInteractivePt.x}
+                          y2={currentInteractivePt.y}
+                          stroke="#3B82F6"
+                          strokeWidth={2 / scale}
+                          strokeDasharray={`${4 / scale} ${4 / scale}`}
+                        />
+                      )}
+                      {/* Area path drawing rubber-band preview */}
+                      {tool === 'area' && activeAreaPoints.length > 0 && (
+                        <>
+                          {/* Segment to cursor */}
+                          <line
+                            x1={activeAreaPoints[activeAreaPoints.length - 1].x}
+                            y1={activeAreaPoints[activeAreaPoints.length - 1].y}
+                            x2={currentInteractivePt.x}
+                            y2={currentInteractivePt.y}
+                            stroke="#22C55E"
+                            strokeWidth={2 / scale}
+                            strokeDasharray={`${4 / scale} ${4 / scale}`}
+                          />
+                          {/* Closing segment to first point */}
+                          <line
+                            x1={currentInteractivePt.x}
+                            y1={currentInteractivePt.y}
+                            x2={activeAreaPoints[0].x}
+                            y2={activeAreaPoints[0].y}
+                            stroke="#22C55E"
+                            strokeWidth={1.5 / scale}
+                            strokeDasharray={`${2 / scale} ${4 / scale}`}
+                            opacity="0.6"
+                          />
+                        </>
+                      )}
+                    </>
+                  )
+                })()}
 
                 {/* 1. Scale Calibration lines */}
                 {calibration && (
