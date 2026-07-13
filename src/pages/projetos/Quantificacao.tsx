@@ -199,7 +199,20 @@ export default function Quantificacao() {
           try {
             const ops = await pdfPage.getOperatorList()
             const vertices: { x: number; y: number }[] = []
-            const OPS = (pdfjsLib as any).OPS || {}
+            // Define operator codes directly to be fully bundle-proof
+            const OPS = {
+              save: 10,
+              restore: 11,
+              transform: 12,
+              moveTo: 13,
+              lineTo: 14,
+              curveTo: 15,
+              curveTo2: 16,
+              curveTo3: 17,
+              closePath: 18,
+              rectangle: 19,
+              constructPath: 91
+            }
 
             let CTM = [1, 0, 0, 1, 0, 0]
             const CTMStack: number[][] = []
