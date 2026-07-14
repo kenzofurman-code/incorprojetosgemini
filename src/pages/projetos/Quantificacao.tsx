@@ -97,6 +97,7 @@ interface SnapPoint {
   y: number
   type: 'endpoint' | 'midpoint'
   segmentCount: number
+  length: number
 }
 
   // CAD Snapping states
@@ -113,7 +114,12 @@ interface SnapPoint {
     return snapPoints.filter(sp => {
       if (sp.type === 'endpoint' && !snapToEndpoints) return false
       if (sp.type === 'midpoint' && !snapToMidpoints) return false
-      if (ignoreHatches && sp.segmentCount > 15) return false
+      if (ignoreHatches) {
+        // Ignore dense shapes (e.g. wall/floor hatches)
+        if (sp.segmentCount > 15) return false
+        // Ignore very small stipples, sand, and concrete aggregate triangles (length < 12 device pixels)
+        if (sp.length < 12) return false
+      }
       return true
     })
   }, [snapPoints, ignoreHatches, snapToMidpoints, snapToEndpoints])
@@ -251,13 +257,18 @@ interface SnapPoint {
 
             let CTM = [1, 0, 0, 1, 0, 0]
             const CTMStack: number[][] = []
-            let lastViewportPt: { x: number; y: number } | null = null
+            let lastViewportPt: { x: number; y: number; tx: number; ty: number } | null = null
 
             const applyCtmAndViewport = (px: number, py: number) => {
               const tx = CTM[0] * px + CTM[2] * py + CTM[4]
               const ty = CTM[1] * px + CTM[3] * py + CTM[5]
               const [vx, vy] = viewport.convertToViewportPoint(tx, ty)
-              return { x: vx, y: vy }
+              return { x: vx, y: vy, tx, ty }
+            }
+
+            interface Segment {
+              start: { x: number; y: number; tx: number; ty: number }
+              end: { x: number; y: number; tx: number; ty: number }
             }
 
             for (let i = 0; i < ops.fnArray.length; i++) {
@@ -289,89 +300,55 @@ interface SnapPoint {
                   continue
                 }
 
+                const segments: Segment[] = []
+
                 if (isModernFormat) {
                   const buffer = args[1]?.[0]
                   if (buffer) {
                     const kk = buffer.length
-                    
-                    // First pass: count actual draw commands in buffer
-                    let segmentCount = 0
+                    let lastPt: { x: number; y: number; tx: number; ty: number } | null = null
+                    let subPathStart: { x: number; y: number; tx: number; ty: number } | null = null
                     let k = 0
-                    while (k < kk) {
-                      const op = buffer[k++]
-                      segmentCount++
-                      if (op === 0 || op === 1) k += 2
-                      else if (op === 2) k += 6
-                      else if (op === 3) k += 4
-                      else if (op === 4) {}
-                    }
-
-                    // Second pass: extract points
-                    k = 0
-                    let subPathStart: { x: number; y: number } | null = null
+                    
                     while (k < kk) {
                       const op = buffer[k++]
                       if (op === 0) { // DrawOPS.moveTo
                         const px = buffer[k++]
                         const py = buffer[k++]
                         const pt = applyCtmAndViewport(px, py)
-                        allExtractedPoints.push({ ...pt, type: 'endpoint', segmentCount })
-                        lastViewportPt = pt
+                        lastPt = pt
                         subPathStart = pt
                       } else if (op === 1) { // DrawOPS.lineTo
                         const px = buffer[k++]
                         const py = buffer[k++]
                         const pt = applyCtmAndViewport(px, py)
-                        allExtractedPoints.push({ ...pt, type: 'endpoint', segmentCount })
-                        if (lastViewportPt) {
-                          allExtractedPoints.push({
-                            x: (lastViewportPt.x + pt.x) / 2,
-                            y: (lastViewportPt.y + pt.y) / 2,
-                            type: 'midpoint',
-                            segmentCount
-                          })
+                        if (lastPt) {
+                          segments.push({ start: lastPt, end: pt })
                         }
-                        lastViewportPt = pt
+                        lastPt = pt
                       } else if (op === 2) { // DrawOPS.curveTo
                         k += 4 // Skip control points
                         const px = buffer[k++]
                         const py = buffer[k++]
                         const pt = applyCtmAndViewport(px, py)
-                        allExtractedPoints.push({ ...pt, type: 'endpoint', segmentCount })
-                        if (lastViewportPt) {
-                          allExtractedPoints.push({
-                            x: (lastViewportPt.x + pt.x) / 2,
-                            y: (lastViewportPt.y + pt.y) / 2,
-                            type: 'midpoint',
-                            segmentCount
-                          })
+                        if (lastPt) {
+                          segments.push({ start: lastPt, end: pt })
                         }
-                        lastViewportPt = pt
+                        lastPt = pt
                       } else if (op === 3) { // DrawOPS.quadraticCurveTo
                         k += 2 // Skip control point
                         const px = buffer[k++]
                         const py = buffer[k++]
                         const pt = applyCtmAndViewport(px, py)
-                        allExtractedPoints.push({ ...pt, type: 'endpoint', segmentCount })
-                        if (lastViewportPt) {
-                          allExtractedPoints.push({
-                            x: (lastViewportPt.x + pt.x) / 2,
-                            y: (lastViewportPt.y + pt.y) / 2,
-                            type: 'midpoint',
-                            segmentCount
-                          })
+                        if (lastPt) {
+                          segments.push({ start: lastPt, end: pt })
                         }
-                        lastViewportPt = pt
+                        lastPt = pt
                       } else if (op === 4) { // DrawOPS.closePath
-                        if (subPathStart && lastViewportPt) {
-                          allExtractedPoints.push({
-                            x: (lastViewportPt.x + subPathStart.x) / 2,
-                            y: (lastViewportPt.y + subPathStart.y) / 2,
-                            type: 'midpoint',
-                            segmentCount
-                          })
-                          lastViewportPt = subPathStart
+                        if (subPathStart && lastPt) {
+                          segments.push({ start: lastPt, end: subPathStart })
                         }
+                        lastPt = subPathStart
                       }
                     }
                   }
@@ -379,62 +356,43 @@ interface SnapPoint {
                   // Legacy pdfjs format
                   const pathOps = args[0]
                   const pathArgs = args[1]
-                  const segmentCount = pathOps.length
                   let argIdx = 0
-                  let subPathStart: { x: number; y: number } | null = null
+                  let lastPt: { x: number; y: number; tx: number; ty: number } | null = null
+                  let subPathStart: { x: number; y: number; tx: number; ty: number } | null = null
 
                   for (const op of pathOps) {
                     if (op === OPS.moveTo) {
                       const px = pathArgs[argIdx++]
                       const py = pathArgs[argIdx++]
                       const pt = applyCtmAndViewport(px, py)
-                      allExtractedPoints.push({ ...pt, type: 'endpoint', segmentCount })
-                      lastViewportPt = pt
+                      lastPt = pt
                       subPathStart = pt
                     } else if (op === OPS.lineTo) {
                       const px = pathArgs[argIdx++]
                       const py = pathArgs[argIdx++]
                       const pt = applyCtmAndViewport(px, py)
-                      allExtractedPoints.push({ ...pt, type: 'endpoint', segmentCount })
-                      if (lastViewportPt) {
-                        allExtractedPoints.push({
-                          x: (lastViewportPt.x + pt.x) / 2,
-                          y: (lastViewportPt.y + pt.y) / 2,
-                          type: 'midpoint',
-                          segmentCount
-                        })
+                      if (lastPt) {
+                        segments.push({ start: lastPt, end: pt })
                       }
-                      lastViewportPt = pt
+                      lastPt = pt
                     } else if (op === OPS.curveTo) {
                       argIdx += 4
                       const px = pathArgs[argIdx++]
                       const py = pathArgs[argIdx++]
                       const pt = applyCtmAndViewport(px, py)
-                      allExtractedPoints.push({ ...pt, type: 'endpoint', segmentCount })
-                      if (lastViewportPt) {
-                        allExtractedPoints.push({
-                          x: (lastViewportPt.x + pt.x) / 2,
-                          y: (lastViewportPt.y + pt.y) / 2,
-                          type: 'midpoint',
-                          segmentCount
-                        })
+                      if (lastPt) {
+                        segments.push({ start: lastPt, end: pt })
                       }
-                      lastViewportPt = pt
+                      lastPt = pt
                     } else if (op === OPS.curveTo2 || op === OPS.curveTo3) {
                       argIdx += 2
                       const px = pathArgs[argIdx++]
                       const py = pathArgs[argIdx++]
                       const pt = applyCtmAndViewport(px, py)
-                      allExtractedPoints.push({ ...pt, type: 'endpoint', segmentCount })
-                      if (lastViewportPt) {
-                        allExtractedPoints.push({
-                          x: (lastViewportPt.x + pt.x) / 2,
-                          y: (lastViewportPt.y + pt.y) / 2,
-                          type: 'midpoint',
-                          segmentCount
-                        })
+                      if (lastPt) {
+                        segments.push({ start: lastPt, end: pt })
                       }
-                      lastViewportPt = pt
+                      lastPt = pt
                     } else if (op === OPS.rectangle) {
                       const px = pathArgs[argIdx++]
                       const py = pathArgs[argIdx++]
@@ -446,44 +404,73 @@ interface SnapPoint {
                         applyCtmAndViewport(px + w, py + h),
                         applyCtmAndViewport(px, py + h)
                       ]
-                      for (const c of corners) {
-                        allExtractedPoints.push({ ...c, type: 'endpoint', segmentCount })
-                      }
                       for (let ci = 0; ci < corners.length; ci++) {
                         const next = corners[(ci + 1) % corners.length]
-                        allExtractedPoints.push({
-                          x: (corners[ci].x + next.x) / 2,
-                          y: (corners[ci].y + next.y) / 2,
-                          type: 'midpoint',
-                          segmentCount
-                        })
+                        segments.push({ start: corners[ci], end: next })
                       }
-                    } else if (op === OPS.closePath && subPathStart && lastViewportPt) {
-                      allExtractedPoints.push({
-                        x: (lastViewportPt.x + subPathStart.x) / 2,
-                        y: (lastViewportPt.y + subPathStart.y) / 2,
-                        type: 'midpoint',
-                        segmentCount
-                      })
-                      lastViewportPt = subPathStart
+                      lastPt = corners[0]
+                    } else if (op === OPS.closePath && subPathStart && lastPt) {
+                      segments.push({ start: lastPt, end: subPathStart })
+                      lastPt = subPathStart
                     }
                   }
+                }
+
+                // Add points from collected segments
+                const segmentCount = segments.length
+                for (const seg of segments) {
+                  const len = Math.hypot(seg.end.tx - seg.start.tx, seg.end.ty - seg.start.ty)
+                  allExtractedPoints.push({
+                    x: seg.start.x,
+                    y: seg.start.y,
+                    type: 'endpoint',
+                    segmentCount,
+                    length: len
+                  })
+                  allExtractedPoints.push({
+                    x: seg.end.x,
+                    y: seg.end.y,
+                    type: 'endpoint',
+                    segmentCount,
+                    length: len
+                  })
+                  allExtractedPoints.push({
+                    x: (seg.start.x + seg.end.x) / 2,
+                    y: (seg.start.y + seg.end.y) / 2,
+                    type: 'midpoint',
+                    segmentCount,
+                    length: len
+                  })
                 }
               } else if (fn === OPS.moveTo || fn === OPS.lineTo) {
                 const px = args[0]
                 const py = args[1]
                 const pt = applyCtmAndViewport(px, py)
                 if (fn === OPS.moveTo) {
-                  allExtractedPoints.push({ ...pt, type: 'endpoint', segmentCount: 1 })
                   lastViewportPt = pt
                 } else {
-                  allExtractedPoints.push({ ...pt, type: 'endpoint', segmentCount: 1 })
                   if (lastViewportPt) {
+                    const len = Math.hypot(pt.tx - lastViewportPt.tx, pt.ty - lastViewportPt.ty)
+                    allExtractedPoints.push({
+                      x: lastViewportPt.x,
+                      y: lastViewportPt.y,
+                      type: 'endpoint',
+                      segmentCount: 1,
+                      length: len
+                    })
+                    allExtractedPoints.push({
+                      x: pt.x,
+                      y: pt.y,
+                      type: 'endpoint',
+                      segmentCount: 1,
+                      length: len
+                    })
                     allExtractedPoints.push({
                       x: (lastViewportPt.x + pt.x) / 2,
                       y: (lastViewportPt.y + pt.y) / 2,
                       type: 'midpoint',
-                      segmentCount: 1
+                      segmentCount: 1,
+                      length: len
                     })
                   }
                   lastViewportPt = pt
@@ -499,16 +486,29 @@ interface SnapPoint {
                   applyCtmAndViewport(px + w, py + h),
                   applyCtmAndViewport(px, py + h)
                 ]
-                for (const c of corners) {
-                  allExtractedPoints.push({ ...c, type: 'endpoint', segmentCount: 4 })
-                }
                 for (let ci = 0; ci < corners.length; ci++) {
                   const next = corners[(ci + 1) % corners.length]
+                  const len = Math.hypot(next.tx - corners[ci].tx, next.ty - corners[ci].ty)
+                  allExtractedPoints.push({
+                    x: corners[ci].x,
+                    y: corners[ci].y,
+                    type: 'endpoint',
+                    segmentCount: 4,
+                    length: len
+                  })
+                  allExtractedPoints.push({
+                    x: next.x,
+                    y: next.y,
+                    type: 'endpoint',
+                    segmentCount: 4,
+                    length: len
+                  })
                   allExtractedPoints.push({
                     x: (corners[ci].x + next.x) / 2,
                     y: (corners[ci].y + next.y) / 2,
                     type: 'midpoint',
-                    segmentCount: 4
+                    segmentCount: 4,
+                    length: len
                   })
                 }
               }
