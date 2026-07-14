@@ -274,6 +274,14 @@ export default function Quantificacao() {
               } else if (fn === OPS.constructPath) {
                 // Support both legacy array format and modern typed array buffer format of pdfjs v4+
                 const isModernFormat = typeof args[0] === 'number'
+                
+                // Filter out fill-only paths (e.g. solid hachuras/fills) to snap only to stroked lines
+                const drawingOp = isModernFormat ? args[0] : ops.fnArray[i + 1]
+                const isStroked = drawingOp === 20 || drawingOp === 21 || drawingOp === 24 || drawingOp === 25 || drawingOp === 26 || drawingOp === 27
+                if (!isStroked) {
+                  continue
+                }
+
                 if (isModernFormat) {
                   const buffer = args[1]?.[0]
                   if (buffer) {
