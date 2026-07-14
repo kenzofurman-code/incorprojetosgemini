@@ -92,12 +92,31 @@ export default function Quantificacao() {
   const containerRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
 
+interface SnapPoint {
+  x: number
+  y: number
+  type: 'endpoint' | 'midpoint'
+  segmentCount: number
+}
+
   // CAD Snapping states
-  const [snapPoints, setSnapPoints] = useState<{ x: number; y: number }[]>([])
+  const [snapPoints, setSnapPoints] = useState<SnapPoint[]>([])
   const [activeSnapPoint, setActiveSnapPoint] = useState<{ x: number; y: number } | null>(null)
   const [snapEnabled, setSnapEnabled] = useState(true)
   const [mousePos, setMousePos] = useState<{ x: number; y: number } | null>(null)
   const [snapDebug, setSnapDebug] = useState('')
+  const [ignoreHatches, setIgnoreHatches] = useState(true)
+  const [snapToMidpoints, setSnapToMidpoints] = useState(true)
+  const [snapToEndpoints, setSnapToEndpoints] = useState(true)
+
+  const activeSnapPoints = useMemo(() => {
+    return snapPoints.filter(sp => {
+      if (sp.type === 'endpoint' && !snapToEndpoints) return false
+      if (sp.type === 'midpoint' && !snapToMidpoints) return false
+      if (ignoreHatches && sp.segmentCount > 15) return false
+      return true
+    })
+  }, [snapPoints, ignoreHatches, snapToMidpoints, snapToEndpoints])
 
   // Debounce scale updates to avoid lagging during zoom wheel
   useEffect(() => {
@@ -207,8 +226,7 @@ export default function Quantificacao() {
         if (pdfPage && viewport) {
           try {
             const ops = await pdfPage.getOperatorList()
-            const vertices: { x: number; y: number }[] = []
-            const midpoints: { x: number; y: number }[] = []
+            const allExtractedPoints: SnapPoint[] = []
             // Define operator codes directly to be fully bundle-proof
             const OPS = {
               save: 10,
@@ -240,17 +258,6 @@ export default function Quantificacao() {
               const ty = CTM[1] * px + CTM[3] * py + CTM[5]
               const [vx, vy] = viewport.convertToViewportPoint(tx, ty)
               return { x: vx, y: vy }
-            }
-
-            const addVertexAndMidpoint = (pt: { x: number; y: number }) => {
-              vertices.push(pt)
-              if (lastViewportPt) {
-                midpoints.push({
-                  x: (lastViewportPt.x + pt.x) / 2,
-                  y: (lastViewportPt.y + pt.y) / 2
-                })
-              }
-              lastViewportPt = pt
             }
 
             for (let i = 0; i < ops.fnArray.length; i++) {
@@ -285,41 +292,83 @@ export default function Quantificacao() {
                 if (isModernFormat) {
                   const buffer = args[1]?.[0]
                   if (buffer) {
-                    let k = 0
                     const kk = buffer.length
-                    let subPathStart: { x: number; y: number } | null = null
+                    
+                    // First pass: count actual draw commands in buffer
+                    let segmentCount = 0
+                    let k = 0
+                    while (k < kk) {
+                      const op = buffer[k++]
+                      segmentCount++
+                      if (op === 0 || op === 1) k += 2
+                      else if (op === 2) k += 6
+                      else if (op === 3) k += 4
+                      else if (op === 4) {}
+                    }
 
+                    // Second pass: extract points
+                    k = 0
+                    let subPathStart: { x: number; y: number } | null = null
                     while (k < kk) {
                       const op = buffer[k++]
                       if (op === 0) { // DrawOPS.moveTo
                         const px = buffer[k++]
                         const py = buffer[k++]
                         const pt = applyCtmAndViewport(px, py)
-                        vertices.push(pt)
+                        allExtractedPoints.push({ ...pt, type: 'endpoint', segmentCount })
                         lastViewportPt = pt
                         subPathStart = pt
                       } else if (op === 1) { // DrawOPS.lineTo
                         const px = buffer[k++]
                         const py = buffer[k++]
                         const pt = applyCtmAndViewport(px, py)
-                        addVertexAndMidpoint(pt)
+                        allExtractedPoints.push({ ...pt, type: 'endpoint', segmentCount })
+                        if (lastViewportPt) {
+                          allExtractedPoints.push({
+                            x: (lastViewportPt.x + pt.x) / 2,
+                            y: (lastViewportPt.y + pt.y) / 2,
+                            type: 'midpoint',
+                            segmentCount
+                          })
+                        }
+                        lastViewportPt = pt
                       } else if (op === 2) { // DrawOPS.curveTo
                         k += 4 // Skip control points
                         const px = buffer[k++]
                         const py = buffer[k++]
                         const pt = applyCtmAndViewport(px, py)
-                        addVertexAndMidpoint(pt)
+                        allExtractedPoints.push({ ...pt, type: 'endpoint', segmentCount })
+                        if (lastViewportPt) {
+                          allExtractedPoints.push({
+                            x: (lastViewportPt.x + pt.x) / 2,
+                            y: (lastViewportPt.y + pt.y) / 2,
+                            type: 'midpoint',
+                            segmentCount
+                          })
+                        }
+                        lastViewportPt = pt
                       } else if (op === 3) { // DrawOPS.quadraticCurveTo
                         k += 2 // Skip control point
                         const px = buffer[k++]
                         const py = buffer[k++]
                         const pt = applyCtmAndViewport(px, py)
-                        addVertexAndMidpoint(pt)
+                        allExtractedPoints.push({ ...pt, type: 'endpoint', segmentCount })
+                        if (lastViewportPt) {
+                          allExtractedPoints.push({
+                            x: (lastViewportPt.x + pt.x) / 2,
+                            y: (lastViewportPt.y + pt.y) / 2,
+                            type: 'midpoint',
+                            segmentCount
+                          })
+                        }
+                        lastViewportPt = pt
                       } else if (op === 4) { // DrawOPS.closePath
                         if (subPathStart && lastViewportPt) {
-                          midpoints.push({
+                          allExtractedPoints.push({
                             x: (lastViewportPt.x + subPathStart.x) / 2,
-                            y: (lastViewportPt.y + subPathStart.y) / 2
+                            y: (lastViewportPt.y + subPathStart.y) / 2,
+                            type: 'midpoint',
+                            segmentCount
                           })
                           lastViewportPt = subPathStart
                         }
@@ -330,6 +379,7 @@ export default function Quantificacao() {
                   // Legacy pdfjs format
                   const pathOps = args[0]
                   const pathArgs = args[1]
+                  const segmentCount = pathOps.length
                   let argIdx = 0
                   let subPathStart: { x: number; y: number } | null = null
 
@@ -338,26 +388,53 @@ export default function Quantificacao() {
                       const px = pathArgs[argIdx++]
                       const py = pathArgs[argIdx++]
                       const pt = applyCtmAndViewport(px, py)
-                      vertices.push(pt)
+                      allExtractedPoints.push({ ...pt, type: 'endpoint', segmentCount })
                       lastViewportPt = pt
                       subPathStart = pt
                     } else if (op === OPS.lineTo) {
                       const px = pathArgs[argIdx++]
                       const py = pathArgs[argIdx++]
                       const pt = applyCtmAndViewport(px, py)
-                      addVertexAndMidpoint(pt)
+                      allExtractedPoints.push({ ...pt, type: 'endpoint', segmentCount })
+                      if (lastViewportPt) {
+                        allExtractedPoints.push({
+                          x: (lastViewportPt.x + pt.x) / 2,
+                          y: (lastViewportPt.y + pt.y) / 2,
+                          type: 'midpoint',
+                          segmentCount
+                        })
+                      }
+                      lastViewportPt = pt
                     } else if (op === OPS.curveTo) {
                       argIdx += 4
                       const px = pathArgs[argIdx++]
                       const py = pathArgs[argIdx++]
                       const pt = applyCtmAndViewport(px, py)
-                      addVertexAndMidpoint(pt)
+                      allExtractedPoints.push({ ...pt, type: 'endpoint', segmentCount })
+                      if (lastViewportPt) {
+                        allExtractedPoints.push({
+                          x: (lastViewportPt.x + pt.x) / 2,
+                          y: (lastViewportPt.y + pt.y) / 2,
+                          type: 'midpoint',
+                          segmentCount
+                        })
+                      }
+                      lastViewportPt = pt
                     } else if (op === OPS.curveTo2 || op === OPS.curveTo3) {
                       argIdx += 2
                       const px = pathArgs[argIdx++]
                       const py = pathArgs[argIdx++]
                       const pt = applyCtmAndViewport(px, py)
-                      addVertexAndMidpoint(pt)
+                      allExtractedPoints.push({ ...pt, type: 'endpoint', segmentCount })
+                      if (lastViewportPt) {
+                        allExtractedPoints.push({
+                          x: (lastViewportPt.x + pt.x) / 2,
+                          y: (lastViewportPt.y + pt.y) / 2,
+                          type: 'midpoint',
+                          segmentCount
+                        })
+                      }
+                      lastViewportPt = pt
                     } else if (op === OPS.rectangle) {
                       const px = pathArgs[argIdx++]
                       const py = pathArgs[argIdx++]
@@ -369,18 +446,24 @@ export default function Quantificacao() {
                         applyCtmAndViewport(px + w, py + h),
                         applyCtmAndViewport(px, py + h)
                       ]
-                      for (const c of corners) vertices.push(c)
+                      for (const c of corners) {
+                        allExtractedPoints.push({ ...c, type: 'endpoint', segmentCount })
+                      }
                       for (let ci = 0; ci < corners.length; ci++) {
                         const next = corners[(ci + 1) % corners.length]
-                        midpoints.push({
+                        allExtractedPoints.push({
                           x: (corners[ci].x + next.x) / 2,
-                          y: (corners[ci].y + next.y) / 2
+                          y: (corners[ci].y + next.y) / 2,
+                          type: 'midpoint',
+                          segmentCount
                         })
                       }
                     } else if (op === OPS.closePath && subPathStart && lastViewportPt) {
-                      midpoints.push({
+                      allExtractedPoints.push({
                         x: (lastViewportPt.x + subPathStart.x) / 2,
-                        y: (lastViewportPt.y + subPathStart.y) / 2
+                        y: (lastViewportPt.y + subPathStart.y) / 2,
+                        type: 'midpoint',
+                        segmentCount
                       })
                       lastViewportPt = subPathStart
                     }
@@ -391,10 +474,19 @@ export default function Quantificacao() {
                 const py = args[1]
                 const pt = applyCtmAndViewport(px, py)
                 if (fn === OPS.moveTo) {
-                  vertices.push(pt)
+                  allExtractedPoints.push({ ...pt, type: 'endpoint', segmentCount: 1 })
                   lastViewportPt = pt
                 } else {
-                  addVertexAndMidpoint(pt)
+                  allExtractedPoints.push({ ...pt, type: 'endpoint', segmentCount: 1 })
+                  if (lastViewportPt) {
+                    allExtractedPoints.push({
+                      x: (lastViewportPt.x + pt.x) / 2,
+                      y: (lastViewportPt.y + pt.y) / 2,
+                      type: 'midpoint',
+                      segmentCount: 1
+                    })
+                  }
+                  lastViewportPt = pt
                 }
               } else if (fn === OPS.rectangle) {
                 const px = args[0]
@@ -407,29 +499,32 @@ export default function Quantificacao() {
                   applyCtmAndViewport(px + w, py + h),
                   applyCtmAndViewport(px, py + h)
                 ]
-                for (const c of corners) vertices.push(c)
+                for (const c of corners) {
+                  allExtractedPoints.push({ ...c, type: 'endpoint', segmentCount: 4 })
+                }
                 for (let ci = 0; ci < corners.length; ci++) {
                   const next = corners[(ci + 1) % corners.length]
-                  midpoints.push({
+                  allExtractedPoints.push({
                     x: (corners[ci].x + next.x) / 2,
-                    y: (corners[ci].y + next.y) / 2
+                    y: (corners[ci].y + next.y) / 2,
+                    type: 'midpoint',
+                    segmentCount: 4
                   })
                 }
               }
             }
 
-            // Combine endpoints + midpoints and deduplicate
-            const allPoints = [...vertices, ...midpoints]
+            // Deduplicate
             const seen = new Set<string>()
-            const uniqueVertices: { x: number; y: number }[] = []
-            for (const v of allPoints) {
-              const key = `${v.x.toFixed(1)},${v.y.toFixed(1)}`
+            const uniqueVertices: SnapPoint[] = []
+            for (const v of allExtractedPoints) {
+              const key = `${v.x.toFixed(1)},${v.y.toFixed(1)},${v.type}`
               if (!seen.has(key)) {
                 seen.add(key)
                 uniqueVertices.push(v)
               }
             }
-            console.log('[Snap Debug] Extracted', vertices.length, 'endpoints +', midpoints.length, 'midpoints =', uniqueVertices.length, 'unique snap points')
+            console.log('[Snap Debug] Extracted', uniqueVertices.length, 'unique snap points')
             console.log('[Snap Debug] Viewport size:', viewport.width.toFixed(0), 'x', viewport.height.toFixed(0))
             if (uniqueVertices.length > 0) {
               let minX = Infinity, maxX = -Infinity
@@ -443,7 +538,7 @@ export default function Quantificacao() {
               console.log('[Snap Debug] X range:', minX.toFixed(1), 'to', maxX.toFixed(1))
               console.log('[Snap Debug] Y range:', minY.toFixed(1), 'to', maxY.toFixed(1))
             }
-            setSnapDebug(`Ops: ${ops.fnArray.length} | Endpoints: ${vertices.length} | Mids: ${midpoints.length} | Unique: ${uniqueVertices.length}`)
+            setSnapDebug(`Ops: ${ops.fnArray.length} | Unique Snap Points: ${uniqueVertices.length}`)
             setSnapPoints(uniqueVertices)
           } catch (snapErr: any) {
             console.warn('[Quantificacao] Failed to extract snap points:', snapErr)
@@ -611,11 +706,11 @@ export default function Quantificacao() {
     setMousePos(coords)
 
     // Calculate CAD snapping to vector endpoints
-    if (snapEnabled && snapPoints.length > 0 && (tool === 'linear' || tool === 'area' || tool === 'calibrate')) {
+    if (snapEnabled && activeSnapPoints.length > 0 && (tool === 'linear' || tool === 'area' || tool === 'calibrate')) {
       let closest: { x: number; y: number } | null = null
       let minDist = 15 / scale // Screen-space threshold (15 screen pixels)
 
-      for (const p of snapPoints) {
+      for (const p of activeSnapPoints) {
         const d = Math.hypot(p.x - coords.x, p.y - coords.y)
         if (d < minDist) {
           minDist = d
@@ -909,20 +1004,51 @@ export default function Quantificacao() {
           
           <div className="h-4 w-px bg-slate-800 self-center mx-1" />
           
-          <button
-            onClick={() => { setSnapEnabled(!snapEnabled); setActiveSnapPoint(null) }}
-            className={`p-1.5 rounded transition-all text-xs font-semibold flex items-center gap-1 cursor-pointer ${
-              snapEnabled ? 'bg-[#22C55E]/20 text-[#22C55E] border border-[#22C55E]/40' : 'hover:bg-white/10'
-            }`}
-            style={{ color: snapEnabled ? '#22C55E' : 'var(--slate)' }}
-            title="Snap CAD (Atrair para vértices de linhas do desenho)"
-          >
-            <Magnet size={14} /> Snap {snapEnabled ? 'Ativo' : 'Inativo'} ({snapPoints.length})
-          </button>
-          {snapDebug && (
-            <span className="text-[10px] text-orange-400 max-w-[300px] truncate" title={snapDebug}>{snapDebug}</span>
-          )}
-        </div>
+           <button
+             onClick={() => { setSnapEnabled(!snapEnabled); setActiveSnapPoint(null) }}
+             className={`p-1.5 rounded transition-all text-xs font-semibold flex items-center gap-1 cursor-pointer ${
+               snapEnabled ? 'bg-[#22C55E]/20 text-[#22C55E] border border-[#22C55E]/40' : 'hover:bg-white/10'
+             }`}
+             style={{ color: snapEnabled ? '#22C55E' : 'var(--slate)' }}
+             title="Snap CAD (Atrair para vértices de linhas do desenho)"
+           >
+             <Magnet size={14} /> Snap {snapEnabled ? 'Ativo' : 'Inativo'} ({activeSnapPoints.length})
+           </button>
+           {snapEnabled && (
+             <div className="flex items-center gap-3 bg-white/5 border border-white/10 rounded px-2.5 py-1 text-[10px] text-slate-300 font-medium">
+               <label className="flex items-center gap-1 cursor-pointer hover:text-white select-none">
+                 <input
+                   type="checkbox"
+                   checked={ignoreHatches}
+                   onChange={(e) => setIgnoreHatches(e.target.checked)}
+                   className="rounded border-white/20 bg-transparent text-orange-500 focus:ring-0 focus:ring-offset-0 cursor-pointer w-3 h-3"
+                 />
+                 Ignorar Hachuras
+               </label>
+               <label className="flex items-center gap-1 cursor-pointer hover:text-white select-none">
+                 <input
+                   type="checkbox"
+                   checked={snapToEndpoints}
+                   onChange={(e) => setSnapToEndpoints(e.target.checked)}
+                   className="rounded border-white/20 bg-transparent text-orange-500 focus:ring-0 focus:ring-offset-0 cursor-pointer w-3 h-3"
+                 />
+                 Pontas
+               </label>
+               <label className="flex items-center gap-1 cursor-pointer hover:text-white select-none">
+                 <input
+                   type="checkbox"
+                   checked={snapToMidpoints}
+                   onChange={(e) => setSnapToMidpoints(e.target.checked)}
+                   className="rounded border-white/20 bg-transparent text-orange-500 focus:ring-0 focus:ring-offset-0 cursor-pointer w-3 h-3"
+                 />
+                 Meios
+               </label>
+             </div>
+           )}
+           {snapDebug && (
+             <span className="text-[10px] text-orange-400 max-w-[200px] truncate" title={snapDebug}>{snapDebug}</span>
+           )}
+         </div>
 
         <Button variant="ghost" size="sm" onClick={handleClearAll} style={{ color: '#EF4444' }}>
           <Trash2 size={14} /> Limpar
@@ -996,7 +1122,7 @@ export default function Quantificacao() {
 
                 {/* DEBUG: Show nearby snap points as small dots (limited to 150 closest to avoid DOM overload on large PDFs) */}
                 {snapEnabled && mousePos && (() => {
-                  const nearby = snapPoints
+                  const nearby = activeSnapPoints
                     .filter(sp => Math.hypot(sp.x - mousePos.x, sp.y - mousePos.y) < 100)
                     .slice(0, 150)
                   return nearby.map((sp, idx) => (
