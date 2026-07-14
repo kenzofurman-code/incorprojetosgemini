@@ -424,10 +424,16 @@ export default function Quantificacao() {
             console.log('[Snap Debug] Extracted', vertices.length, 'endpoints +', midpoints.length, 'midpoints =', uniqueVertices.length, 'unique snap points')
             console.log('[Snap Debug] Viewport size:', viewport.width.toFixed(0), 'x', viewport.height.toFixed(0))
             if (uniqueVertices.length > 0) {
-              const xs = uniqueVertices.map(v => v.x)
-              const ys = uniqueVertices.map(v => v.y)
-              console.log('[Snap Debug] X range:', Math.min(...xs).toFixed(1), 'to', Math.max(...xs).toFixed(1))
-              console.log('[Snap Debug] Y range:', Math.min(...ys).toFixed(1), 'to', Math.max(...ys).toFixed(1))
+              let minX = Infinity, maxX = -Infinity
+              let minY = Infinity, maxY = -Infinity
+              for (const v of uniqueVertices) {
+                if (v.x < minX) minX = v.x
+                if (v.x > maxX) maxX = v.x
+                if (v.y < minY) minY = v.y
+                if (v.y > maxY) maxY = v.y
+              }
+              console.log('[Snap Debug] X range:', minX.toFixed(1), 'to', maxX.toFixed(1))
+              console.log('[Snap Debug] Y range:', minY.toFixed(1), 'to', maxY.toFixed(1))
             }
             setSnapDebug(`Ops: ${ops.fnArray.length} | Endpoints: ${vertices.length} | Mids: ${midpoints.length} | Unique: ${uniqueVertices.length}`)
             setSnapPoints(uniqueVertices)
@@ -980,17 +986,22 @@ export default function Quantificacao() {
                   </g>
                 )}
 
-                {/* DEBUG: Show all snap points as small dots */}
-                {snapEnabled && snapPoints.length > 0 && snapPoints.map((sp, idx) => (
-                  <circle
-                    key={idx}
-                    cx={sp.x}
-                    cy={sp.y}
-                    r={2 / scale}
-                    fill="#FF6600"
-                    opacity={0.5}
-                  />
-                ))}
+                {/* DEBUG: Show nearby snap points as small dots (limited to 150 closest to avoid DOM overload on large PDFs) */}
+                {snapEnabled && mousePos && (() => {
+                  const nearby = snapPoints
+                    .filter(sp => Math.hypot(sp.x - mousePos.x, sp.y - mousePos.y) < 100)
+                    .slice(0, 150)
+                  return nearby.map((sp, idx) => (
+                    <circle
+                      key={idx}
+                      cx={sp.x}
+                      cy={sp.y}
+                      r={2.5 / scale}
+                      fill="#FF6600"
+                      opacity={0.6}
+                    />
+                  ))
+                })()}
 
                 {/* Rubber-band previews for interactive drawings */}
                 {(() => {
