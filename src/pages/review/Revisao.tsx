@@ -1,10 +1,11 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
+import * as pdfjsLib from 'pdfjs-dist'
 import {
   ArrowLeft, FileCheck, Plus, MessageSquare,
   CheckCircle, XCircle, AlertTriangle, Layers, Loader2,
   ZoomIn, ZoomOut, Square, Edit3, MapPin,
-  Cloud, Type, Image as ImageIcon, Hexagon, ArrowUpRight, X
+  Cloud, Type, Image as ImageIcon, Hexagon, ArrowUpRight, X, Ruler, Magnet
 } from 'lucide-react'
 import { Card, Button, IssueCategoryBadge, StatusBadge, DataSourceBadge, DrawingQrCode } from '../../components/ui'
 import { MOCK_DRAWINGS } from '../../data/mockData'
@@ -63,9 +64,17 @@ function getCloudPath(xPct: number, yPct: number, wPct: number, hPct: number, wi
   return path
 }
 
+interface SnapPoint {
+  x: number
+  y: number
+  type: 'endpoint' | 'midpoint'
+  segmentCount: number
+  length: number
+}
+
 // Parse serialized markup from description
 interface ParsedMarkup {
-  type: 'pin' | 'rect' | 'scribble' | 'arrow' | 'cloud' | 'polygon' | 'text'
+  type: 'pin' | 'rect' | 'scribble' | 'arrow' | 'cloud' | 'polygon' | 'text' | 'dimension'
   x: number
   y: number
   w?: number
@@ -194,7 +203,7 @@ export default function Revisao({ viewOnly = false }: { viewOnly?: boolean }) {
 
   const [selectedIssue, setSelectedIssue] = useState<string | null>(null)
   const [addingIssue, setAddingIssue] = useState(false)
-  const [markupTool, setMarkupTool] = useState<'pin' | 'rect' | 'scribble' | 'arrow' | 'cloud' | 'polygon' | 'text'>('pin')
+  const [markupTool, setMarkupTool] = useState<'pin' | 'rect' | 'scribble' | 'arrow' | 'cloud' | 'polygon' | 'text' | 'dimension'>('pin')
 
   // Advanced Styling states
   const [markupColor, setMarkupColor] = useState('#EF4444')
@@ -215,6 +224,41 @@ export default function Revisao({ viewOnly = false }: { viewOnly?: boolean }) {
   const [notes, setNotes] = useState('')
   const [showDecisionPanel, setShowDecisionPanel] = useState(false)
   const [submitting, setSubmitting] = useState(false)
+
+  // Load drawing calibration from LocalStorage (if calibrated in quantification tab)
+  const [calibration, setCalibration] = useState<any | null>(null)
+  useEffect(() => {
+    if (!drawing?.id) return
+    const saved = localStorage.getItem(`quantification-${drawing.id}`)
+    if (saved) {
+      try {
+        const data = JSON.parse(saved)
+        if (data.calibration) setCalibration(data.calibration)
+      } catch (e) {
+        console.error('[Revisao] Failed loading calibration for cota:', e)
+      }
+    }
+  }, [drawing?.id])
+
+  // CAD Snapping states
+  const [snapPoints, setSnapPoints] = useState<SnapPoint[]>([])
+  const [activeSnapPoint, setActiveSnapPoint] = useState<{ x: number; y: number } | null>(null)
+  const [snapEnabled, setSnapEnabled] = useState(true)
+  const [ignoreHatches, setIgnoreHatches] = useState(true)
+  const [snapToMidpoints, setSnapToMidpoints] = useState(true)
+  const [snapToEndpoints, setSnapToEndpoints] = useState(true)
+
+  const activeSnapPoints = useMemo(() => {
+    return snapPoints.filter(sp => {
+      if (sp.type === 'endpoint' && !snapToEndpoints) return false
+      if (sp.type === 'midpoint' && !snapToMidpoints) return false
+      if (ignoreHatches) {
+        if (sp.segmentCount > 15) return false
+        if (sp.length < 12) return false
+      }
+      return true
+    })
+  }, [snapPoints, ignoreHatches, snapToMidpoints, snapToEndpoints])
 
   // PDF Page loader state
   const [renderedPage, setRenderedPage] = useState<RenderedPdfPage | null>(null)
@@ -252,6 +296,285 @@ export default function Revisao({ viewOnly = false }: { viewOnly?: boolean }) {
       .finally(() => {
         if (!cancelled) setRenderingPdf(false)
       })
+
+    // Load vector vertices for CAD snapping independently
+    const renderScale = 2.5
+    const loadingTask = pdfjsLib.getDocument({ url: drawing.pdfUrl })
+    loadingTask.promise.then(async pdfDoc => {
+      if (cancelled) return
+      try {
+        const pdfPage = await pdfDoc.getPage(1)
+        const viewport = pdfPage.getViewport({ scale: renderScale })
+        const ops = await pdfPage.getOperatorList()
+        const allExtractedPoints: SnapPoint[] = []
+        
+        const OPS = {
+          save: 10,
+          restore: 11,
+          transform: 12,
+          moveTo: 13,
+          lineTo: 14,
+          curveTo: 15,
+          curveTo2: 16,
+          curveTo3: 17,
+          closePath: 18,
+          rectangle: 19,
+          constructPath: 91
+        }
+
+        let CTM = [1, 0, 0, 1, 0, 0]
+        const CTMStack: number[][] = []
+        let lastViewportPt: { x: number; y: number; tx: number; ty: number } | null = null
+
+        const applyCtmAndViewport = (px: number, py: number) => {
+          const tx = CTM[0] * px + CTM[2] * py + CTM[4]
+          const ty = CTM[1] * px + CTM[3] * py + CTM[5]
+          const [vx, vy] = viewport.convertToViewportPoint(tx, ty)
+          return { x: vx, y: vy, tx, ty }
+        }
+
+        interface Segment {
+          start: { x: number; y: number; tx: number; ty: number }
+          end: { x: number; y: number; tx: number; ty: number }
+        }
+
+        for (let i = 0; i < ops.fnArray.length; i++) {
+          const fn = ops.fnArray[i]
+          const args = ops.argsArray[i]
+
+          if (fn === OPS.save) {
+            CTMStack.push([...CTM])
+          } else if (fn === OPS.restore) {
+            CTM = CTMStack.pop() || [1, 0, 0, 1, 0, 0]
+          } else if (fn === OPS.transform) {
+            const t = args
+            CTM = [
+              CTM[0] * t[0] + CTM[2] * t[1],
+              CTM[1] * t[0] + CTM[3] * t[1],
+              CTM[0] * t[2] + CTM[2] * t[3],
+              CTM[1] * t[2] + CTM[3] * t[3],
+              CTM[0] * t[4] + CTM[2] * t[5] + CTM[4],
+              CTM[1] * t[4] + CTM[3] * t[5] + CTM[5]
+            ]
+          } else if (fn === OPS.constructPath) {
+            const isModernFormat = typeof args[0] === 'number'
+            const drawingOp = isModernFormat ? args[0] : ops.fnArray[i + 1]
+            const isStroked = drawingOp === 20 || drawingOp === 21 || drawingOp === 24 || drawingOp === 25 || drawingOp === 26 || drawingOp === 27
+            if (!isStroked) continue
+
+            const segments: Segment[] = []
+
+            if (isModernFormat) {
+              const buffer = args[1]?.[0]
+              if (buffer) {
+                const kk = buffer.length
+                let lastPt: { x: number; y: number; tx: number; ty: number } | null = null
+                let subPathStart: { x: number; y: number; tx: number; ty: number } | null = null
+                let k = 0
+                while (k < kk) {
+                  const op = buffer[k++]
+                  if (op === 0) {
+                    const px = buffer[k++]
+                    const py = buffer[k++]
+                    const pt = applyCtmAndViewport(px, py)
+                    lastPt = pt
+                    subPathStart = pt
+                  } else if (op === 1) {
+                    const px = buffer[k++]
+                    const py = buffer[k++]
+                    const pt = applyCtmAndViewport(px, py)
+                    if (lastPt) segments.push({ start: lastPt, end: pt })
+                    lastPt = pt
+                  } else if (op === 2) {
+                    k += 4
+                    const px = buffer[k++]
+                    const py = buffer[k++]
+                    const pt = applyCtmAndViewport(px, py)
+                    if (lastPt) segments.push({ start: lastPt, end: pt })
+                    lastPt = pt
+                  } else if (op === 3) {
+                    k += 2
+                    const px = buffer[k++]
+                    const py = buffer[k++]
+                    const pt = applyCtmAndViewport(px, py)
+                    if (lastPt) segments.push({ start: lastPt, end: pt })
+                    lastPt = pt
+                  } else if (op === 4) {
+                    if (subPathStart && lastPt) segments.push({ start: lastPt, end: subPathStart })
+                    lastPt = subPathStart
+                  }
+                }
+              }
+            } else {
+              const pathOps = args[0]
+              const pathArgs = args[1]
+              let argIdx = 0
+              let lastPt: { x: number; y: number; tx: number; ty: number } | null = null
+              let subPathStart: { x: number; y: number; tx: number; ty: number } | null = null
+
+              for (const op of pathOps) {
+                if (op === OPS.moveTo) {
+                  const px = pathArgs[argIdx++]
+                  const py = pathArgs[argIdx++]
+                  const pt = applyCtmAndViewport(px, py)
+                  lastPt = pt
+                  subPathStart = pt
+                } else if (op === OPS.lineTo) {
+                  const px = pathArgs[argIdx++]
+                  const py = pathArgs[argIdx++]
+                  const pt = applyCtmAndViewport(px, py)
+                  if (lastPt) segments.push({ start: lastPt, end: pt })
+                  lastPt = pt
+                } else if (op === OPS.curveTo) {
+                  argIdx += 4
+                  const px = pathArgs[argIdx++]
+                  const py = pathArgs[argIdx++]
+                  const pt = applyCtmAndViewport(px, py)
+                  if (lastPt) segments.push({ start: lastPt, end: pt })
+                  lastPt = pt
+                } else if (op === OPS.curveTo2 || op === OPS.curveTo3) {
+                  argIdx += 2
+                  const px = pathArgs[argIdx++]
+                  const py = pathArgs[argIdx++]
+                  const pt = applyCtmAndViewport(px, py)
+                  if (lastPt) segments.push({ start: lastPt, end: pt })
+                  lastPt = pt
+                } else if (op === OPS.rectangle) {
+                  const px = pathArgs[argIdx++]
+                  const py = pathArgs[argIdx++]
+                  const w = pathArgs[argIdx++]
+                  const h = pathArgs[argIdx++]
+                  const corners = [
+                    applyCtmAndViewport(px, py),
+                    applyCtmAndViewport(px + w, py),
+                    applyCtmAndViewport(px + w, py + h),
+                    applyCtmAndViewport(px, py + h)
+                  ]
+                  for (let ci = 0; ci < corners.length; ci++) {
+                    const next = corners[(ci + 1) % corners.length]
+                    segments.push({ start: corners[ci], end: next })
+                  }
+                  lastPt = corners[0]
+                } else if (op === OPS.closePath && subPathStart && lastPt) {
+                  segments.push({ start: lastPt, end: subPathStart })
+                  lastPt = subPathStart
+                }
+              }
+            }
+
+            const segmentCount = segments.length
+            for (const seg of segments) {
+              const len = Math.hypot(seg.end.tx - seg.start.tx, seg.end.ty - seg.start.ty)
+              allExtractedPoints.push({
+                x: seg.start.x,
+                y: seg.start.y,
+                type: 'endpoint',
+                segmentCount,
+                length: len
+              })
+              allExtractedPoints.push({
+                x: seg.end.x,
+                y: seg.end.y,
+                type: 'endpoint',
+                segmentCount,
+                length: len
+              })
+              allExtractedPoints.push({
+                x: (seg.start.x + seg.end.x) / 2,
+                y: (seg.start.y + seg.end.y) / 2,
+                type: 'midpoint',
+                segmentCount,
+                length: len
+              })
+            }
+          } else if (fn === OPS.moveTo || fn === OPS.lineTo) {
+            const px = args[0]
+            const py = args[1]
+            const pt = applyCtmAndViewport(px, py)
+            if (fn === OPS.moveTo) {
+              lastViewportPt = pt
+            } else {
+              if (lastViewportPt) {
+                const len = Math.hypot(pt.tx - lastViewportPt.tx, pt.ty - lastViewportPt.ty)
+                allExtractedPoints.push({
+                  x: lastViewportPt.x,
+                  y: lastViewportPt.y,
+                  type: 'endpoint',
+                  segmentCount: 1,
+                  length: len
+                })
+                allExtractedPoints.push({
+                  x: pt.x,
+                  y: pt.y,
+                  type: 'endpoint',
+                  segmentCount: 1,
+                  length: len
+                })
+                allExtractedPoints.push({
+                  x: (lastViewportPt.x + pt.x) / 2,
+                  y: (lastViewportPt.y + pt.y) / 2,
+                  type: 'midpoint',
+                  segmentCount: 1,
+                  length: len
+                })
+              }
+              lastViewportPt = pt
+            }
+          } else if (fn === OPS.rectangle) {
+            const px = args[0]
+            const py = args[1]
+            const w = args[2]
+            const h = args[3]
+            const corners = [
+              applyCtmAndViewport(px, py),
+              applyCtmAndViewport(px + w, py),
+              applyCtmAndViewport(px + w, py + h),
+              applyCtmAndViewport(px, py + h)
+            ]
+            for (let ci = 0; ci < corners.length; ci++) {
+              const next = corners[(ci + 1) % corners.length]
+              const len = Math.hypot(next.tx - corners[ci].tx, next.ty - corners[ci].ty)
+              allExtractedPoints.push({
+                x: corners[ci].x,
+                y: corners[ci].y,
+                type: 'endpoint',
+                segmentCount: 4,
+                length: len
+              })
+              allExtractedPoints.push({
+                x: next.x,
+                y: next.y,
+                type: 'endpoint',
+                segmentCount: 4,
+                length: len
+              })
+              allExtractedPoints.push({
+                x: (corners[ci].x + next.x) / 2,
+                y: (corners[ci].y + next.y) / 2,
+                type: 'midpoint',
+                segmentCount: 4,
+                length: len
+              })
+            }
+          }
+        }
+
+        const seen = new Set<string>()
+        const uniqueVertices: SnapPoint[] = []
+        for (const v of allExtractedPoints) {
+          const key = `${v.x.toFixed(1)},${v.y.toFixed(1)},${v.type}`
+          if (!seen.has(key)) {
+            seen.add(key)
+            uniqueVertices.push(v)
+          }
+        }
+        if (!cancelled) setSnapPoints(uniqueVertices)
+      } catch (err) {
+        console.warn('[Revisao] Failed to extract snap points:', err)
+      }
+    }).catch(err => {
+      console.warn('[Revisao] Failed to load PDF document for snapping:', err)
+    })
 
     return () => {
       cancelled = true
@@ -378,8 +701,13 @@ export default function Revisao({ viewOnly = false }: { viewOnly?: boolean }) {
       // Apply zoom & pan transformations in reverse to get percentage coordinates (0-100)
       const xInCanvasPixels = (xOnViewport - offset.x) / scale
       const yInCanvasPixels = (yOnViewport - offset.y) / scale
-      const xPct = (xInCanvasPixels / dimensions.width) * 100
-      const yPct = (yInCanvasPixels / dimensions.height) * 100
+
+      // Use snapped point if hovering close to one
+      const snappedX = (snapEnabled && activeSnapPoint) ? activeSnapPoint.x : xInCanvasPixels
+      const snappedY = (snapEnabled && activeSnapPoint) ? activeSnapPoint.y : yInCanvasPixels
+
+      const xPct = (snappedX / dimensions.width) * 100
+      const yPct = (snappedY / dimensions.height) * 100
 
       if (markupTool === 'pin') {
         setPendingMarkup({
@@ -388,7 +716,7 @@ export default function Revisao({ viewOnly = false }: { viewOnly?: boolean }) {
           y: yPct,
           color: markupColor,
         })
-      } else if (markupTool === 'rect' || markupTool === 'cloud' || markupTool === 'arrow') {
+      } else if (markupTool === 'rect' || markupTool === 'cloud' || markupTool === 'arrow' || markupTool === 'dimension') {
         setBoxStart({ x: xPct, y: yPct })
         setBoxCurrent({ x: xPct, y: yPct })
       } else if (markupTool === 'scribble') {
@@ -423,14 +751,33 @@ export default function Revisao({ viewOnly = false }: { viewOnly?: boolean }) {
       const yOnViewport = e.clientY - rect.top
       const xInCanvasPixels = (xOnViewport - offset.x) / scale
       const yInCanvasPixels = (yOnViewport - offset.y) / scale
-      const xPct = (xInCanvasPixels / dimensions.width) * 100
-      const yPct = (yInCanvasPixels / dimensions.height) * 100
 
-      if ((markupTool === 'rect' || markupTool === 'cloud' || markupTool === 'arrow') && boxStart) {
+      // Snapping attraction
+      let closest: SnapPoint | null = null
+      if (snapEnabled && activeSnapPoints.length > 0) {
+        let minDist = 15 / scale // Screen-space threshold of 15 screen pixels
+        for (const p of activeSnapPoints) {
+          const d = Math.hypot(p.x - xInCanvasPixels, p.y - yInCanvasPixels)
+          if (d < minDist) {
+            minDist = d
+            closest = p
+          }
+        }
+      }
+      setActiveSnapPoint(closest)
+
+      const snappedX = closest ? closest.x : xInCanvasPixels
+      const snappedY = closest ? closest.y : yInCanvasPixels
+      const xPct = (snappedX / dimensions.width) * 100
+      const yPct = (snappedY / dimensions.height) * 100
+
+      if ((markupTool === 'rect' || markupTool === 'cloud' || markupTool === 'arrow' || markupTool === 'dimension') && boxStart) {
         setBoxCurrent({ x: xPct, y: yPct })
       } else if (markupTool === 'scribble' && drawingPoints.length > 0) {
         setDrawingPoints(prev => [...prev, { x: xPct, y: yPct }])
       }
+    } else {
+      setActiveSnapPoint(null)
     }
   }
 
@@ -486,6 +833,35 @@ export default function Revisao({ viewOnly = false }: { viewOnly?: boolean }) {
             color: markupColor,
             strokeWidth: markupStrokeWidth,
             strokeDasharray: markupStrokeDash === 'dashed' ? '4 2' : undefined,
+          })
+        }
+        setBoxStart(null)
+        setBoxCurrent(null)
+      } else if (markupTool === 'dimension' && boxStart && boxCurrent) {
+        const w = boxCurrent.x - boxStart.x
+        const h = boxCurrent.y - boxStart.y
+        if (Math.abs(w) > 0.5 || Math.abs(h) > 0.5) {
+          // Calculate distance in canvas pixels
+          const x1 = (boxStart.x / 100) * dimensions.width
+          const y1 = (boxStart.y / 100) * dimensions.height
+          const x2 = (boxCurrent.x / 100) * dimensions.width
+          const y2 = (boxCurrent.y / 100) * dimensions.height
+          const pixelsDist = Math.hypot(x2 - x1, y2 - y1)
+          
+          let measureText = `${Math.round(pixelsDist)} px`
+          if (calibration) {
+            const realDist = pixelsDist * calibration.scaleFactor
+            measureText = `${realDist.toFixed(2)} m`
+          }
+
+          setPendingMarkup({
+            type: 'dimension',
+            x: boxStart.x,
+            y: boxStart.y,
+            w, h,
+            text: measureText,
+            color: markupColor,
+            strokeWidth: markupStrokeWidth,
           })
         }
         setBoxStart(null)
@@ -813,7 +1189,8 @@ export default function Revisao({ viewOnly = false }: { viewOnly?: boolean }) {
                 { type: 'scribble', label: 'Lápis', icon: <Edit3 size={12} /> },
                 { type: 'arrow', label: 'Seta', icon: <ArrowUpRight size={12} /> },
                 { type: 'polygon', label: 'Polígono', icon: <Hexagon size={12} /> },
-                { type: 'text', label: 'Texto', icon: <Type size={12} /> }
+                { type: 'text', label: 'Texto', icon: <Type size={12} /> },
+                { type: 'dimension', label: 'Cota (Medir)', icon: <Ruler size={12} /> }
               ].map(tool => (
                 <button
                   key={tool.type}
@@ -828,6 +1205,52 @@ export default function Revisao({ viewOnly = false }: { viewOnly?: boolean }) {
                   <span>{tool.label}</span>
                 </button>
               ))}
+            </div>
+
+            {/* Snapping controls */}
+            <div className="flex items-center gap-2 bg-slate-800/40 px-2 py-0.5 rounded border border-slate-750 text-xs">
+              <button
+                type="button"
+                onClick={() => setSnapEnabled(!snapEnabled)}
+                className={`flex items-center gap-1 px-2 py-0.5 rounded cursor-pointer transition-all ${
+                  snapEnabled ? 'bg-green-600 text-white font-semibold' : 'bg-slate-700 text-slate-400'
+                }`}
+                title="Ativar atração automática para cantos e meios das linhas do desenho"
+              >
+                <Magnet size={12} />
+                <span>Snap: {snapEnabled ? 'Sim' : 'Não'}</span>
+              </button>
+              {snapEnabled && (
+                <div className="flex items-center gap-3 text-[10px] text-slate-300 ml-1">
+                  <label className="flex items-center gap-1 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={ignoreHatches}
+                      onChange={e => setIgnoreHatches(e.target.checked)}
+                      className="cursor-pointer rounded border-slate-700 bg-slate-800"
+                    />
+                    <span>Ignorar Hachuras</span>
+                  </label>
+                  <label className="flex items-center gap-1 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={snapToEndpoints}
+                      onChange={e => setSnapToEndpoints(e.target.checked)}
+                      className="cursor-pointer rounded border-slate-700 bg-slate-800"
+                    />
+                    <span>Pontas</span>
+                  </label>
+                  <label className="flex items-center gap-1 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={snapToMidpoints}
+                      onChange={e => setSnapToMidpoints(e.target.checked)}
+                      className="cursor-pointer rounded border-slate-700 bg-slate-800"
+                    />
+                    <span>Meios</span>
+                  </label>
+                </div>
+              )}
             </div>
 
             <div className="h-6 w-px bg-slate-800" />
@@ -964,6 +1387,27 @@ export default function Revisao({ viewOnly = false }: { viewOnly?: boolean }) {
 
                   {/* SVG Vector Overlays for Box/Scribble/Cloud/Arrow/Polygon/Text Markups */}
                   <svg className="absolute inset-0 w-full h-full pointer-events-none z-10">
+                    {/* Visual Snap Cursor Indicator (Green CAD target square scaled for constant screen size) */}
+                    {snapEnabled && activeSnapPoint && (
+                      <g>
+                        <rect
+                          x={activeSnapPoint.x - 6 / scale}
+                          y={activeSnapPoint.y - 6 / scale}
+                          width={12 / scale}
+                          height={12 / scale}
+                          fill="none"
+                          stroke="#22C55E"
+                          strokeWidth={2 / scale}
+                        />
+                        <circle
+                          cx={activeSnapPoint.x}
+                          cy={activeSnapPoint.y}
+                          r={1.5 / scale}
+                          fill="#22C55E"
+                        />
+                      </g>
+                    )}
+
                     {/* Render saved markups from issues database */}
                     {issues.map(issue => {
                       const markup = parseIssueDescription(issue.description)
@@ -1029,6 +1473,64 @@ export default function Revisao({ viewOnly = false }: { viewOnly?: boolean }) {
                               points={`${x2},${y2} ${h1x},${h1y} ${h2x},${h2y}`}
                               fill={color}
                             />
+                          </g>
+                        )
+                      }
+                      if (markup.type === 'dimension' && markup.w != null && markup.h != null) {
+                        const x1 = (markup.x / 100) * dimensions.width
+                        const y1 = (markup.y / 100) * dimensions.height
+                        const x2 = ((markup.x + markup.w) / 100) * dimensions.width
+                        const y2 = ((markup.y + markup.h) / 100) * dimensions.height
+                        
+                        const mx = (x1 + x2) / 2
+                        const my = (y1 + y2) / 2
+                        const angle = Math.atan2(y2 - y1, x2 - x1)
+                        const perp = angle + Math.PI / 2
+                        
+                        const tickLen = 6
+                        const t1x1 = x1 - tickLen * Math.cos(perp)
+                        const t1y1 = y1 - tickLen * Math.sin(perp)
+                        const t1x2 = x1 + tickLen * Math.cos(perp)
+                        const t1y2 = y1 + tickLen * Math.sin(perp)
+                        
+                        const t2x1 = x2 - tickLen * Math.cos(perp)
+                        const t2y1 = y2 - tickLen * Math.sin(perp)
+                        const t2x2 = x2 + tickLen * Math.cos(perp)
+                        const t2y2 = y2 + tickLen * Math.sin(perp)
+                        
+                        let rot = (angle * 180) / Math.PI
+                        if (rot > 90) rot -= 180
+                        if (rot < -90) rot += 180
+                        
+                        return (
+                          <g key={issue.id}>
+                            <line x1={x1} y1={y1} x2={x2} y2={y2} stroke={color} strokeWidth={strokeWidth} />
+                            <line x1={t1x1} y1={t1y1} x2={t1x2} y2={t1y2} stroke={color} strokeWidth={strokeWidth + 1} />
+                            <line x1={t2x1} y1={t2y1} x2={t2x2} y2={t2y2} stroke={color} strokeWidth={strokeWidth + 1} />
+                            
+                            <g transform={`rotate(${rot}, ${mx}, ${my})`}>
+                              <rect
+                                x={mx - 24}
+                                y={my - 9}
+                                width={48}
+                                height={18}
+                                rx={3}
+                                fill="#0d1825"
+                                stroke={color}
+                                strokeWidth={1}
+                              />
+                              <text
+                                x={mx}
+                                y={my}
+                                textAnchor="middle"
+                                dominantBaseline="central"
+                                fill="#FFFFFF"
+                                fontSize="10px"
+                                fontWeight="bold"
+                              >
+                                {markup.text}
+                              </text>
+                            </g>
                           </g>
                         )
                       }
@@ -1141,6 +1643,71 @@ export default function Revisao({ viewOnly = false }: { viewOnly?: boolean }) {
                       )
                     })()}
 
+                    {addingIssue && markupTool === 'dimension' && boxStart && boxCurrent && (() => {
+                      const x1 = (boxStart.x / 100) * dimensions.width
+                      const y1 = (boxStart.y / 100) * dimensions.height
+                      const x2 = (boxCurrent.x / 100) * dimensions.width
+                      const y2 = (boxCurrent.y / 100) * dimensions.height
+                      
+                      const mx = (x1 + x2) / 2
+                      const my = (y1 + y2) / 2
+                      const angle = Math.atan2(y2 - y1, x2 - x1)
+                      const perp = angle + Math.PI / 2
+                      
+                      const tickLen = 6
+                      const t1x1 = x1 - tickLen * Math.cos(perp)
+                      const t1y1 = y1 - tickLen * Math.sin(perp)
+                      const t1x2 = x1 + tickLen * Math.cos(perp)
+                      const t1y2 = y1 + tickLen * Math.sin(perp)
+                      
+                      const t2x1 = x2 - tickLen * Math.cos(perp)
+                      const t2y1 = y2 - tickLen * Math.sin(perp)
+                      const t2x2 = x2 + tickLen * Math.cos(perp)
+                      const t2y2 = y2 + tickLen * Math.sin(perp)
+                      
+                      const pixelsDist = Math.hypot(x2 - x1, y2 - y1)
+                      let text = `${Math.round(pixelsDist)} px`
+                      if (calibration) {
+                        text = `${(pixelsDist * calibration.scaleFactor).toFixed(2)} m`
+                      }
+                      
+                      let rot = (angle * 180) / Math.PI
+                      if (rot > 90) rot -= 180
+                      if (rot < -90) rot += 180
+                      
+                      return (
+                        <g>
+                          <line x1={x1} y1={y1} x2={x2} y2={y2} stroke={markupColor} strokeWidth={markupStrokeWidth} />
+                          <line x1={t1x1} y1={t1y1} x2={t1x2} y2={t1y2} stroke={markupColor} strokeWidth={markupStrokeWidth + 1} />
+                          <line x1={t2x1} y1={t2y1} x2={t2x2} y2={t2y2} stroke={markupColor} strokeWidth={markupStrokeWidth + 1} />
+                          
+                          <g transform={`rotate(${rot}, ${mx}, ${my})`}>
+                            <rect
+                              x={mx - 24}
+                              y={my - 9}
+                              width={48}
+                              height={18}
+                              rx={3}
+                              fill="#0d1825"
+                              stroke={markupColor}
+                              strokeWidth={1}
+                            />
+                            <text
+                              x={mx}
+                              y={my}
+                              textAnchor="middle"
+                              dominantBaseline="central"
+                              fill="#FFFFFF"
+                              fontSize="10px"
+                              fontWeight="bold"
+                            >
+                              {text}
+                            </text>
+                          </g>
+                        </g>
+                      )
+                    })()}
+
                     {addingIssue && markupTool === 'polygon' && drawingPoints.length > 0 && (
                       <g>
                         <polyline
@@ -1240,6 +1807,64 @@ export default function Revisao({ viewOnly = false }: { viewOnly?: boolean }) {
                           </g>
                         )
                       }
+                      if (pendingMarkup.type === 'dimension' && pendingMarkup.w != null && pendingMarkup.h != null) {
+                        const x1 = (pendingMarkup.x / 100) * dimensions.width
+                        const y1 = (pendingMarkup.y / 100) * dimensions.height
+                        const x2 = ((pendingMarkup.x + pendingMarkup.w) / 100) * dimensions.width
+                        const y2 = ((pendingMarkup.y + pendingMarkup.h) / 100) * dimensions.height
+                        
+                        const mx = (x1 + x2) / 2
+                        const my = (y1 + y2) / 2
+                        const angle = Math.atan2(y2 - y1, x2 - x1)
+                        const perp = angle + Math.PI / 2
+                        
+                        const tickLen = 6
+                        const t1x1 = x1 - tickLen * Math.cos(perp)
+                        const t1y1 = y1 - tickLen * Math.sin(perp)
+                        const t1x2 = x1 + tickLen * Math.cos(perp)
+                        const t1y2 = y1 + tickLen * Math.sin(perp)
+                        
+                        const t2x1 = x2 - tickLen * Math.cos(perp)
+                        const t2y1 = y2 - tickLen * Math.sin(perp)
+                        const t2x2 = x2 + tickLen * Math.cos(perp)
+                        const t2y2 = y2 + tickLen * Math.sin(perp)
+                        
+                        let rot = (angle * 180) / Math.PI
+                        if (rot > 90) rot -= 180
+                        if (rot < -90) rot += 180
+                        
+                        return (
+                          <g>
+                            <line x1={x1} y1={y1} x2={x2} y2={y2} stroke={color} strokeWidth={strokeWidth} />
+                            <line x1={t1x1} y1={t1y1} x2={t1x2} y2={t1y2} stroke={color} strokeWidth={strokeWidth + 1} />
+                            <line x1={t2x1} y1={t2y1} x2={t2x2} y2={t2y2} stroke={color} strokeWidth={strokeWidth + 1} />
+                            
+                            <g transform={`rotate(${rot}, ${mx}, ${my})`}>
+                              <rect
+                                x={mx - 24}
+                                y={my - 9}
+                                width={48}
+                                height={18}
+                                rx={3}
+                                fill="#0d1825"
+                                stroke={color}
+                                strokeWidth={1}
+                              />
+                              <text
+                                x={mx}
+                                y={my}
+                                textAnchor="middle"
+                                dominantBaseline="central"
+                                fill="#FFFFFF"
+                                fontSize="10px"
+                                fontWeight="bold"
+                              >
+                                {pendingMarkup.text}
+                              </text>
+                            </g>
+                          </g>
+                        )
+                      }
                       if (pendingMarkup.type === 'polygon' && pendingMarkup.points) {
                         const ptsStr = pendingMarkup.points.map((p: { x: number; y: number }) => `${(p.x / 100) * dimensions.width},${(p.y / 100) * dimensions.height}`).join(' ')
                         return (
@@ -1316,6 +1941,7 @@ export default function Revisao({ viewOnly = false }: { viewOnly?: boolean }) {
                         {pendingMarkup.type === 'arrow' && 'St'}
                         {pendingMarkup.type === 'polygon' && 'Pl'}
                         {pendingMarkup.type === 'text' && 'Tx'}
+                        {pendingMarkup.type === 'dimension' && 'Ct'}
                         {pendingMarkup.type === 'pin' && 'Pt'}
                       </div>
                     )}
@@ -1369,7 +1995,8 @@ export default function Revisao({ viewOnly = false }: { viewOnly?: boolean }) {
                   pendingMarkup.type === 'scribble' ? 'Desenho Livre' :
                   pendingMarkup.type === 'arrow' ? 'Seta Indicativa' :
                   pendingMarkup.type === 'polygon' ? 'Polígono' :
-                  pendingMarkup.type === 'text' ? 'Texto' : 'Ponto'
+                  pendingMarkup.type === 'text' ? 'Texto' :
+                  pendingMarkup.type === 'dimension' ? 'Cota de Medição' : 'Ponto'
                 }
               </div>
 
