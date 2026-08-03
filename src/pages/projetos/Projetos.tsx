@@ -1,11 +1,11 @@
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Upload, Search, Eye, GitCompare, Layers,
   FileCheck, ChevronDown, ChevronRight, QrCode, History, Loader2, AlertCircle, Ruler
 } from 'lucide-react'
 import { Card, PageHeader, StatusBadge, Button, DataSourceBadge, QrCodePlacer } from '../../components/ui'
-import { DISCIPLINES, DISCIPLINE_MAP } from '../../data/mockData'
+
 import { useDrawings } from '../../hooks/useDrawings'
 import { useApp } from '../../context/AppContext'
 import type { Drawing, ProjectPhase } from '../../types'
@@ -30,7 +30,8 @@ function DrawingRow({ drawing, onAction }: {
   onAction: (action: 'compare' | 'overlay' | 'review' | 'view' | 'quantify', id: string) => void
 }) {
   const [expanded, setExpanded] = useState(false)
-  const disc = DISCIPLINE_MAP[drawing.disciplineCode]
+  const { disciplines } = useApp()
+  const disc = disciplines.find(d => d.code === drawing.disciplineCode)
 
   return (
     <>
@@ -209,7 +210,16 @@ function UploadPanel({ projectId, onClose, onUploaded }: {
   onUploaded: () => void
 }) {
   const { upload } = useDrawings(projectId)
-  const { currentUser } = useApp()
+  const {
+    currentUser,
+    currentProject,
+    disciplines,
+    floors,
+    phases,
+    docTypes,
+    namingSequence,
+    namingSeparator
+  } = useApp()
 
   const [file, setFile] = useState<File | null>(null)
   const [disciplineCode, setDisciplineCode] = useState('')
@@ -217,16 +227,140 @@ function UploadPanel({ projectId, onClose, onUploaded }: {
   const [docType, setDocType] = useState('PLA')
   const [number, setNumber] = useState('001')
   const [revision, setRevision] = useState('R00')
-  const [phase, setPhase] = useState<ProjectPhase>('anteprojeto')
+  const [phase, setPhase] = useState<ProjectPhase>('executivo')
   const [title, setTitle] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState(false)
   const [uploadedDrawing, setUploadedDrawing] = useState<Drawing | null>(null)
+  const [autoFilled, setAutoFilled] = useState(false)
 
-  const generatedCode = disciplineCode && floorCode
-    ? `043-EP-${disciplineCode}-${floorCode}-${docType}-${number}-${revision}`
-    : ''
+  // Generate code dynamically based on namingSequence and namingSeparator
+  const generatedCode = useMemo(() => {
+    const values: Record<string, string> = {
+      PROJETO: currentProject.code,
+      FASE: phase === 'estudo_preliminar' ? 'EP'
+            : phase === 'anteprojeto' ? 'AP'
+            : phase === 'projeto_legal' ? 'PL'
+            : phase === 'projeto_basico' ? 'PB'
+            : phase === 'pre_executivo' ? 'PE'
+            : phase === 'executivo' ? 'EX'
+            : phase === 'liberado_para_obra' ? 'LO'
+            : 'ASB',
+      DISCIPLINA: disciplineCode,
+      PAVIMENTO: floorCode,
+      TIPO: docType,
+      NUMERO: number,
+      REVISAO: revision
+    }
+    if (!disciplineCode || !floorCode) return ''
+    return namingSequence
+      .map(key => values[key] || '')
+      .filter(Boolean)
+      .join(namingSeparator)
+  }, [namingSequence, namingSeparator, currentProject.code, phase, disciplineCode, floorCode, docType, number, revision])
+
+  const handleFileChange = (selectedFile: File | null) => {
+    setFile(selectedFile)
+    setAutoFilled(false)
+    if (!selectedFile) return
+
+    const nameWithoutExt = selectedFile.name.replace(/\.[^/.]+$/, "")
+    const delimiters = new RegExp(`[${namingSeparator}_\\s-]+`)
+    const tokens = nameWithoutExt.split(delimiters).map(t => t.trim().toUpperCase())
+
+    let filledDisc = ''
+    let filledFloor = ''
+    let filledType = docTypes[0] || 'PLA'
+    let filledRev = 'R00'
+    let filledPhase: ProjectPhase = 'executivo'
+    let filledNumber = '001'
+    let filledTitle = ''
+
+    // 1. Positional matching based on namingSequence
+    namingSequence.forEach((key, idx) => {
+      const token = tokens[idx]
+      if (!token) return
+
+      if (key === 'DISCIPLINA') {
+        const found = disciplines.find(d => d.code.toUpperCase() === token)
+        if (found) filledDisc = found.code
+      } else if (key === 'PAVIMENTO') {
+        const found = floors.find(f => f.code.toUpperCase() === token)
+        if (found) filledFloor = found.code
+        else if (/^(P\d+|SS\d+|TER|COB|MEZ|TIP|ULT|DUP)$/i.test(token)) filledFloor = token
+      } else if (key === 'TIPO') {
+        const found = docTypes.find(t => t.toUpperCase() === token)
+        if (found) filledType = found
+      } else if (key === 'REVISAO') {
+        const match = token.match(/^R(EV)?(\d+)$/i)
+        if (match) {
+          const num = match[2].padStart(2, '0')
+          filledRev = `R${num}`
+        }
+      } else if (key === 'FASE') {
+        if (token === 'EP' || token === 'AP' || token === 'ANTE') filledPhase = 'anteprojeto'
+        else if (token === 'PB' || token === 'BAS') filledPhase = 'projeto_basico'
+        else if (token === 'PE' || token === 'PRE') filledPhase = 'pre_executivo'
+        else if (token === 'EX' || token === 'EXE' || token === 'EXEC' || token === 'EXECUTIVO') filledPhase = 'executivo'
+        else if (token === 'ASB' || token === 'ASBUILT') filledPhase = 'as_built'
+      } else if (key === 'NUMERO') {
+        if (/^\d{3}$/.test(token)) filledNumber = token
+      }
+    })
+
+    // 2. Fallback heuristic: search all tokens
+    tokens.forEach(token => {
+      if (!filledDisc) {
+        const found = disciplines.find(d => d.code.toUpperCase() === token)
+        if (found) filledDisc = found.code
+      }
+      if (!filledFloor) {
+        const found = floors.find(f => f.code.toUpperCase() === token)
+        if (found) filledFloor = found.code
+        else if (/^(P\d+|SS\d+|TER|COB|MEZ|TIP|ULT|DUP)$/i.test(token)) filledFloor = token
+      }
+      if (!filledType) {
+        const found = docTypes.find(t => t.toUpperCase() === token)
+        if (found) filledType = found
+      }
+      if (filledRev === 'R00') {
+        const match = token.match(/^R(EV)?(\d+)$/i)
+        if (match) {
+          const num = match[2].padStart(2, '0')
+          filledRev = `R${num}`
+        }
+      }
+      if (filledNumber === '001') {
+        if (/^\d{3}$/.test(token)) filledNumber = token
+      }
+    })
+
+    // 3. Clean title
+    const ignored = new Set([
+      filledDisc, filledFloor, filledType, filledRev, filledNumber,
+      'R00','R01','R02','R03','R04','R05',
+      'EP','AP','PB','PE','EX','EXE','ASB', currentProject.code.toUpperCase()
+    ])
+    const titleTokens = tokens.filter(t => !ignored.has(t) && !/^\d{2,4}$/.test(t))
+    if (titleTokens.length > 0) {
+      filledTitle = titleTokens.join(' ')
+        .toLowerCase()
+        .replace(/\b\w/g, c => c.toUpperCase())
+    } else {
+      filledTitle = nameWithoutExt.replace(/[-_]+/g, ' ').trim()
+    }
+
+    if (filledDisc) setDisciplineCode(filledDisc)
+    if (filledFloor) setFloorCode(filledFloor)
+    if (filledType) setDocType(filledType)
+    if (filledRev) setRevision(filledRev)
+    if (filledPhase) setPhase(filledPhase)
+    if (filledNumber) setNumber(filledNumber)
+    if (filledTitle) setTitle(filledTitle)
+
+    setAutoFilled(true)
+  }
 
   async function handleSubmit() {
     if (!file || !disciplineCode || !floorCode || !title) {
@@ -290,6 +424,12 @@ function UploadPanel({ projectId, onClose, onUploaded }: {
           ✓ Prancha enviada com sucesso!
         </div>
       )}
+      {autoFilled && (
+        <div className="text-xs p-3 rounded-lg mb-4"
+          style={{ background: 'rgba(59,130,246,0.1)', color: '#3B82F6', border: '1px solid rgba(59,130,246,0.25)' }}>
+          ✓ Campos identificados automaticamente a partir do nome do arquivo!
+        </div>
+      )}
 
       <label
         className="block border-2 border-dashed rounded-xl p-8 text-center cursor-pointer hover:border-orange-400/50 transition-colors"
@@ -299,7 +439,7 @@ function UploadPanel({ projectId, onClose, onUploaded }: {
           type="file"
           accept="application/pdf"
           className="hidden"
-          onChange={e => setFile(e.target.files?.[0] || null)}
+          onChange={e => handleFileChange(e.target.files?.[0] || null)}
         />
         <Upload size={32} className="mx-auto mb-3" style={{ color: file ? 'var(--orange)' : 'var(--slate)' }} />
         <div className="text-sm font-medium mb-1" style={{ color: 'var(--white)' }}>
@@ -320,19 +460,20 @@ function UploadPanel({ projectId, onClose, onUploaded }: {
             style={{ background: 'var(--surface-mid)', border: '1px solid var(--surface-border)', color: 'var(--white)' }}
           >
             <option value="">Selecionar...</option>
-            {DISCIPLINES.map(d => <option key={d.code} value={d.code}>{d.code} – {d.name}</option>)}
+            {disciplines.map(d => <option key={d.code} value={d.code}>{d.code} – {d.name}</option>)}
           </select>
         </div>
         <div>
           <label className="text-xs mb-1.5 block" style={{ color: 'var(--slate)' }}>Pavimento *</label>
-          <input
-            type="text"
-            placeholder="Ex: P03, TER, COB"
+          <select
             value={floorCode}
-            onChange={e => setFloorCode(e.target.value.toUpperCase())}
+            onChange={e => setFloorCode(e.target.value)}
             className="w-full text-sm rounded-lg px-3 py-2 outline-none"
             style={{ background: 'var(--surface-mid)', border: '1px solid var(--surface-border)', color: 'var(--white)' }}
-          />
+          >
+            <option value="">Selecionar...</option>
+            {floors.map(f => <option key={f.code} value={f.code}>{f.code} – {f.name}</option>)}
+          </select>
         </div>
         <div>
           <label className="text-xs mb-1.5 block" style={{ color: 'var(--slate)' }}>Fase</label>
@@ -342,7 +483,7 @@ function UploadPanel({ projectId, onClose, onUploaded }: {
             className="w-full text-sm rounded-lg px-3 py-2 outline-none"
             style={{ background: 'var(--surface-mid)', border: '1px solid var(--surface-border)', color: 'var(--white)' }}
           >
-            {PHASE_OPTIONS.map(p => <option key={p.value} value={p.value}>{p.label}</option>)}
+            {phases.map(p => <option key={p.value} value={p.value}>{p.label}</option>)}
           </select>
         </div>
         <div>
@@ -364,7 +505,7 @@ function UploadPanel({ projectId, onClose, onUploaded }: {
             className="w-full text-sm rounded-lg px-3 py-2 outline-none"
             style={{ background: 'var(--surface-mid)', border: '1px solid var(--surface-border)', color: 'var(--white)' }}
           >
-            {['PLA','DET','COR','LAJ','FOR'].map(t => <option key={t}>{t}</option>)}
+            {docTypes.map(t => <option key={t} value={t}>{t}</option>)}
           </select>
         </div>
         <div>
@@ -417,7 +558,7 @@ function UploadPanel({ projectId, onClose, onUploaded }: {
 
 export default function Projetos() {
   const navigate = useNavigate()
-  const { currentProject } = useApp()
+  const { currentProject, disciplines } = useApp()
   const projectId = currentProject.id
 
   const { drawings, loading, error, usingMockData, refresh } = useDrawings(projectId)
@@ -496,7 +637,7 @@ export default function Projetos() {
           />
         </div>
         {[
-          { value: filterDisc, setter: setFilterDisc, label: 'Disciplina', options: DISCIPLINES.map(d => ({ v: d.code, l: `${d.code} – ${d.name}` })) },
+          { value: filterDisc, setter: setFilterDisc, label: 'Disciplina', options: disciplines.map(d => ({ v: d.code, l: `${d.code} – ${d.name}` })) },
           { value: filterStatus, setter: setFilterStatus, label: 'Status', options: [
             { v: 'em_analise', l: 'Em Análise' },
             { v: 'aprovado', l: 'Aprovado' },

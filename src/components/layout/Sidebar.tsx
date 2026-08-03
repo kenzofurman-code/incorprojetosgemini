@@ -2,7 +2,7 @@ import { NavLink, useLocation, useNavigate } from 'react-router-dom'
 import {
   LayoutDashboard, Calendar, FolderOpen, FileSearch,
   Building2, Printer, ChevronLeft, ChevronRight,
-  HardHat, LogOut, Layers, Box, PenLine
+  HardHat, LogOut, Layers, Box, PenLine, Settings
 } from 'lucide-react'
 import { useApp } from '../../context/AppContext'
 
@@ -13,6 +13,7 @@ const OFFICE_NAV = [
   { to: '/revisao',     icon: FileSearch,       label: 'Revisão'          },
   { to: '/bim',         icon: Box,              label: 'BIM Viewer'       },
   { to: '/cad',         icon: PenLine,          label: 'DWG/DXF'          },
+  { to: '/configuracoes', icon: Settings,        label: 'Configurações'    },
 ]
 
 const FIELD_NAV = [

@@ -15,6 +15,7 @@ import Versoes from './pages/obra/Versoes'
 import Plotagem from './pages/plotagem/Plotagem'
 import BIMPage from './pages/bim/BIMPage'
 import CADPage from './pages/cad/CADPage'
+import Configuracoes from './pages/projetos/Configuracoes'
 
 // ─── Auth Guard ───────────────────────────────────────────────────────────────
 // Redirects unauthenticated users to /login.
@@ -93,6 +94,7 @@ export default function App() {
             <Route path="obra"                         element={<Obra />} />
             <Route path="versoes"                      element={<Versoes />} />
             <Route path="plotagem"                     element={<Plotagem />} />
+            <Route path="configuracoes"                element={<Configuracoes />} />
           </Route>
 
           {/* Catch-all */}
