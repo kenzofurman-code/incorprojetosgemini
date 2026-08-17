@@ -587,17 +587,30 @@ export default function IFCViewer({ onIssueCreated, modelLabel, className = '', 
   const handleCanvasClick = useCallback(async (e: React.MouseEvent<HTMLDivElement>) => {
     const world = worldRef.current
     const model = currentModelRef.current
-    if (!world || !model || !containerRef.current) return
+    const canvas = canvasRef.current
+    if (!world || !model || !canvas) return
 
-    const rect = containerRef.current.getBoundingClientRect()
-    const x = ((e.clientX - rect.left) / rect.width) * 2 - 1
-    const y = -((e.clientY - rect.top) / rect.height) * 2 + 1
+    // Client coordinates for That Open Platform
+    const mouseVec = new THREE.Vector2(e.clientX, e.clientY)
+
+    // Raycast on FragmentsModel
+    let res: any = null
+    try {
+      res = await model.raycast({ camera: world.camera.three, mouse: mouseVec, dom: canvas })
+    } catch (err) {
+      console.warn('[IFCViewer] model.raycast error:', err)
+    }
+
+    // Three.js Raycaster fallback/hybrid for hit point & face
+    const rect = canvas.getBoundingClientRect()
+    const ndcX = ((e.clientX - rect.left) / rect.width) * 2 - 1
+    const ndcY = -((e.clientY - rect.top) / rect.height) * 2 + 1
     const raycaster = new THREE.Raycaster()
-    raycaster.setFromCamera(new THREE.Vector2(x, y), world.camera.three)
+    raycaster.setFromCamera(new THREE.Vector2(ndcX, ndcY), world.camera.three)
     const targets: THREE.Object3D[] = [model.object, ...Array.from(world.meshes)]
     const intersects = raycaster.intersectObjects(targets, true)
 
-    if (intersects.length === 0) {
+    if (!res && intersects.length === 0) {
       if (mode === 'inspect' && !e.shiftKey) {
         setSelectedElements([])
         await (model as any).resetColor()
@@ -606,16 +619,18 @@ export default function IFCViewer({ onIssueCreated, modelLabel, className = '', 
     }
 
     const hit = intersects[0]
+    const hitPoint: THREE.Vector3 = res?.point || hit?.point || new THREE.Vector3()
 
     // ── MODE: MEASURE ──
     if (mode === 'measure') {
-      const { point, isSnapped } = getSnappedPoint(hit)
+      const snapResult = hit ? getSnappedPoint(hit) : { point: hitPoint, isSnapped: false }
+      const finalPoint = snapResult.point
       if (measurePoints.length === 0) {
-        setMeasurePoints([point])
-        measurementManagerRef.current?.setSnapIndicator(point, isSnapped)
+        setMeasurePoints([finalPoint])
+        measurementManagerRef.current?.setSnapIndicator(finalPoint, snapResult.isSnapped)
       } else {
         const p1 = measurePoints[0]
-        measurementManagerRef.current?.addMeasurement(p1, point)
+        measurementManagerRef.current?.addMeasurement(p1, finalPoint)
         measurementManagerRef.current?.clearPreview()
         measurementManagerRef.current?.setSnapIndicator(null)
         setMeasurePoints([])
@@ -626,117 +641,121 @@ export default function IFCViewer({ onIssueCreated, modelLabel, className = '', 
 
     // ── MODE: SECTION (Clipper) ──
     if (mode === 'section') {
-      const normal = hit.face ? hit.face.normal.clone() : new THREE.Vector3(0, 1, 0)
-      clipperRef.current?.createFromNormalAndCoplanarPoint(world, normal, hit.point)
+      const normal = res?.normal || (hit?.face ? hit.face.normal.clone() : new THREE.Vector3(0, 1, 0))
+      clipperRef.current?.createFromNormalAndCoplanarPoint(world, normal, hitPoint)
       setHasClippingPlanes(true)
       return
     }
 
     // ── MODE: INSPECT / ORBIT (Selection & QTO) ──
     if (mode === 'inspect' || mode === 'orbit') {
-      try {
-        const mouseVec = new THREE.Vector2(x, y)
-        const res = await model.raycast({ camera: world.camera.three, mouse: mouseVec, dom: canvasRef.current! })
-        if (res && typeof (res as any).localId === 'number') {
-          const localId = (res as any).localId as number
-          const isShift = e.shiftKey
+      let localId = res && typeof res.localId === 'number' ? res.localId : null
 
-          let category = 'Elemento IFC'
-          let name = `Elemento #${localId}`
-          let guid = ''
-          let storey = ''
-          let volume = 0
-          let area = 0
-          let length = 0
+      // Fallback localId extraction from Fragment mesh if res.localId is null
+      if (localId === null && hit?.object) {
+        try {
+          const itemIds = (hit.object as any)?.fragment?.itemIds || (hit.object as any)?.userData?.itemIds
+          if (itemIds && itemIds.length > 0) localId = itemIds[0]
+        } catch { /* ignore */ }
+      }
 
-          try {
-            const rawData = await model.getItemsData([localId])
-            if (rawData && rawData[0]) {
-              const d = rawData[0] as any
-              if (d.category) category = d.category
-              if (d.name) name = d.name
-              if (d.guid) guid = d.guid
-              if (d.storey) storey = d.storey
-            }
-          } catch { /* fallback */ }
+      if (localId !== null) {
+        const isShift = e.shiftKey
 
-          try {
-            const vol = await model.getItemsVolume([localId])
-            if (typeof vol === 'number') {
-              volume = vol
-            }
-          } catch { /* fallback */ }
+        let category = 'Elemento IFC'
+        let name = `Elemento #${localId}`
+        let guid = ''
+        let storey = ''
+        let volume = 0
+        let area = 0
+        let length = 0
 
-          const bbox = new THREE.Box3()
-          if (hit.object) bbox.setFromObject(hit.object)
-          const size = bbox.getSize(new THREE.Vector3())
-          length = Math.max(size.x, size.y, size.z)
-          area = (size.x * size.y) || (size.x * size.z)
-
-          const elementData: SelectedBIMElement = {
-            modelId: model.modelId,
-            expressId: localId,
-            category,
-            name,
-            guid,
-            storey,
-            dimensions: {
-              volume: volume > 0 ? volume : (size.x * size.y * size.z),
-              area: area > 0 ? area : undefined,
-              length: length > 0 ? length : undefined,
-              width: size.x,
-              height: size.y,
-            },
-            psets: [
-              {
-                name: 'Propriedades Geométricas',
-                properties: [
-                  { name: 'Largura (X)', value: `${size.x.toFixed(2)} m` },
-                  { name: 'Altura (Y)', value: `${size.y.toFixed(2)} m` },
-                  { name: 'Profundidade (Z)', value: `${size.z.toFixed(2)} m` },
-                  { name: 'Volume Estimado', value: `${(size.x * size.y * size.z).toFixed(3)} m³` },
-                ]
-              }
-            ]
+        try {
+          const rawData = await model.getItemsData([localId])
+          if (rawData && rawData[0]) {
+            const d = rawData[0] as any
+            if (d.category) category = d.category
+            if (d.name) name = d.name
+            if (d.guid) guid = d.guid
+            if (d.storey) storey = d.storey
           }
+        } catch { /* fallback */ }
 
-          if (isShift) {
-            setSelectedElements(prev => {
-              const exists = prev.some(el => el.expressId === localId)
-              const updated = exists ? prev.filter(el => el.expressId !== localId) : [...prev, elementData]
-              const ids = updated.map(u => u.expressId)
-              ;(model as any).resetColor().then(() => {
-                if (ids.length > 0) model.setColor(ids, HIGHLIGHT_COLOR)
-              })
-              return updated
-            })
-          } else {
-            setSelectedElements([elementData])
-            await (model as any).resetColor()
-            await model.setColor([localId], HIGHLIGHT_COLOR)
+        try {
+          const vol = await model.getItemsVolume([localId])
+          if (typeof vol === 'number') {
+            volume = vol
           }
+        } catch { /* fallback */ }
 
-          setShowDrawer(true)
+        const bbox = new THREE.Box3()
+        if (hit?.object) bbox.setFromObject(hit.object)
+        const size = bbox.getSize(new THREE.Vector3())
+        length = Math.max(size.x, size.y, size.z)
+        area = (size.x * size.y) || (size.x * size.z)
+
+        const elementData: SelectedBIMElement = {
+          modelId: model.modelId,
+          expressId: localId,
+          category,
+          name,
+          guid,
+          storey,
+          dimensions: {
+            volume: volume > 0 ? volume : (size.x * size.y * size.z),
+            area: area > 0 ? area : undefined,
+            length: length > 0 ? length : undefined,
+            width: size.x,
+            height: size.y,
+          },
+          psets: [
+            {
+              name: 'Propriedades Geométricas',
+              properties: [
+                { name: 'Largura (X)', value: `${size.x.toFixed(2)} m` },
+                { name: 'Altura (Y)', value: `${size.y.toFixed(2)} m` },
+                { name: 'Profundidade (Z)', value: `${size.z.toFixed(2)} m` },
+                { name: 'Volume Estimado', value: `${(size.x * size.y * size.z).toFixed(3)} m³` },
+              ]
+            }
+          ]
         }
-      } catch (err) {
-        console.warn('[IFCViewer] Raycast selection error:', err)
+
+        if (isShift) {
+          setSelectedElements(prev => {
+            const exists = prev.some(el => el.expressId === localId)
+            const updated = exists ? prev.filter(el => el.expressId !== localId) : [...prev, elementData]
+            const ids = updated.map(u => u.expressId)
+            ;(model as any).resetColor().then(() => {
+              if (ids.length > 0) model.setColor(ids, HIGHLIGHT_COLOR)
+            })
+            return updated
+          })
+        } else {
+          setSelectedElements([elementData])
+          await (model as any).resetColor()
+          await model.setColor([localId], HIGHLIGHT_COLOR)
+        }
+
+        setShowDrawer(true)
       }
     }
   }, [mode, measurePoints])
 
   // Mouse move for 3D measurement preview line & magnetic snap indicator
   const handleCanvasMouseMove = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
-    if (!worldRef.current || !containerRef.current || !currentModelRef.current) return
+    if (!worldRef.current || !canvasRef.current || !currentModelRef.current) return
     const world = worldRef.current
     const model = currentModelRef.current
+    const canvas = canvasRef.current
 
     if (mode === 'measure') {
-      const rect = containerRef.current.getBoundingClientRect()
-      const x = ((e.clientX - rect.left) / rect.width) * 2 - 1
-      const y = -((e.clientY - rect.top) / rect.height) * 2 + 1
+      const rect = canvas.getBoundingClientRect()
+      const ndcX = ((e.clientX - rect.left) / rect.width) * 2 - 1
+      const ndcY = -((e.clientY - rect.top) / rect.height) * 2 + 1
 
       const raycaster = new THREE.Raycaster()
-      raycaster.setFromCamera(new THREE.Vector2(x, y), world.camera.three)
+      raycaster.setFromCamera(new THREE.Vector2(ndcX, ndcY), world.camera.three)
       const targets: THREE.Object3D[] = [model.object, ...Array.from(world.meshes)]
       const intersects = raycaster.intersectObjects(targets, true)
 
