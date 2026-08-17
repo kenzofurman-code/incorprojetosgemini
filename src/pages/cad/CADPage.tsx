@@ -1,26 +1,76 @@
 /**
  * CADPage.tsx
- * Página de demonstração que consome CADViewer.
- * A toolbar, o input de arquivo e o display de coordenadas são
- * totalmente externos ao componente — ele só preenche o espaço.
+ * ─────────────────────────────────────────────────────────────────────────────
+ * Página Completa do Visualizador CAD Avançado (DWG / DXF).
+ * Integra:
+ *  - Gerenciador de Camadas (Layers) com cores oficiais e isolamento
+ *  - Alternador de Layouts (Model Space vs Paper Space / Pranchas)
+ *  - Ferramenta de Cota e Medição 2D de Alta Precisão (WCS)
+ *  - Inspeção de Entidades CAD com Spatial Picking
+ *  - Coordenadas de Engenharia em Tempo Real
+ * ─────────────────────────────────────────────────────────────────────────────
  */
 
-import { useRef, useState, useCallback } from 'react'
+import { useRef, useState, useCallback, useEffect } from 'react'
 import {
-  Upload, Move, ZoomIn, ZoomOut, Maximize2, MousePointer2, Loader2
+  Upload, Move, ZoomIn, ZoomOut, Maximize2, MousePointer2, Loader2,
+  Layers, Ruler, Info, Trash2, CheckCircle2, AlertCircle
 } from 'lucide-react'
 import CADViewer, { type CADViewerHandle } from '../../components/cad/CADViewer'
 import { PageHeader } from '../../components/ui'
 import type { CADCanvasClickEvent } from '../../components/cad/cadViewerCore'
+import type { AcApLayerSummary } from '@mlightcad/cad-simple-viewer'
+import CADLayersDrawer from '../../components/cad/CADLayersDrawer'
+import CADLayoutsBar, { type CADLayoutItem } from '../../components/cad/CADLayoutsBar'
+import CADEntityDrawer, { type SelectedCADEntity } from '../../components/cad/CADEntityDrawer'
+import { CADMeasurementManager, type CADMeasurementItem } from '../../components/cad/cadMeasurement'
+
+type CADMode = 'pan' | 'zoom' | 'measure' | 'inspect' | null
 
 export default function CADPage() {
   const viewerRef = useRef<CADViewerHandle>(null)
+  const measurementManagerRef = useRef<CADMeasurementManager>(new CADMeasurementManager())
 
   const [loadedFile, setLoadedFile] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [lastClick, setLastClick] = useState<CADCanvasClickEvent | null>(null)
-  const [activeMode, setActiveMode] = useState<'pan' | 'zoom' | null>(null)
+  const [activeMode, setActiveMode] = useState<CADMode>('pan')
+
+  // Camadas (Layers)
+  const [layers, setLayers] = useState<AcApLayerSummary[]>([])
+  const [showLayersDrawer, setShowLayersDrawer] = useState(false)
+
+  // Layouts (Model vs Paper)
+  const [layouts, setLayouts] = useState<CADLayoutItem[]>([{ name: 'Model', isModel: true }])
+  const [activeLayout, setActiveLayout] = useState('Model')
+
+  // Inspeção de Entidades
+  const [selectedEntity, setSelectedEntity] = useState<SelectedCADEntity | null>(null)
+  const [showEntityDrawer, setShowEntityDrawer] = useState(false)
+
+  // Medição 2D
+  const [measurePoints, setMeasurePoints] = useState<{ x: number; y: number }[]>([])
+  const [activeMeasurements, setActiveMeasurements] = useState<CADMeasurementItem[]>([])
+  const [currentMouseWorld, setCurrentMouseWorld] = useState<{ x: number; y: number } | null>(null)
+  const [renderTick, setRenderTick] = useState(0)
+
+  // Atualiza tabela de camadas e layouts após abrir arquivo
+  const refreshMetadata = useCallback(() => {
+    if (!viewerRef.current) return
+    setTimeout(() => {
+      const summaries = viewerRef.current?.getLayerSummaries() || []
+      setLayers(summaries)
+
+      const docLayouts = viewerRef.current?.getLayouts() || [{ name: 'Model', isModel: true }]
+      setLayouts(docLayouts)
+    }, 400)
+  }, [])
+
+  // Força re-render do SVG de cotas durante interação
+  const triggerRedraw = useCallback(() => {
+    setRenderTick(t => t + 1)
+  }, [])
 
   // ── Handlers de arquivo ──────────────────────────────────────────────────
   async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
@@ -28,19 +78,88 @@ export default function CADPage() {
     if (!file) return
     setError(null)
     setIsLoading(true)
+    measurementManagerRef.current.clearAll()
+    setActiveMeasurements([])
+    setMeasurePoints([])
+    setSelectedEntity(null)
+
     await viewerRef.current?.loadFile(file)
     setIsLoading(false)
-    // onFileLoaded e onLoadError já atualizam loadedFile/error via props
-    e.target.value = '' // permite reabrir o mesmo arquivo
+    e.target.value = ''
   }
 
   // ── Handler de clique no canvas ──────────────────────────────────────────
   const handleCanvasClick = useCallback((evt: CADCanvasClickEvent) => {
     setLastClick(evt)
-    // evt.screenX/screenY  → posição pixel no canvas (para pins de issue)
-    // evt.worldX/worldY    → coordenadas do modelo CAD (para salvar no banco)
-    console.log('[CADPage] Clique no canvas:', evt)
-  }, [])
+    triggerRedraw()
+
+    // MODO: INSPECT (Picking de entidade)
+    if (activeMode === 'inspect') {
+      const entity = viewerRef.current?.pickEntity(evt.screenX, evt.screenY)
+      if (entity) {
+        setSelectedEntity(entity)
+        setShowEntityDrawer(true)
+        setShowLayersDrawer(false)
+      }
+      return
+    }
+
+    // MODO: MEASURE (Cota 2D ponto a ponto)
+    if (activeMode === 'measure') {
+      const clickPoint = { x: evt.worldX, y: evt.worldY }
+      if (measurePoints.length === 0) {
+        setMeasurePoints([clickPoint])
+      } else {
+        const p1 = measurePoints[0]
+        measurementManagerRef.current.addMeasurement(p1, clickPoint)
+        setActiveMeasurements([...measurementManagerRef.current.getMeasurements()])
+        setMeasurePoints([])
+      }
+      return
+    }
+  }, [activeMode, measurePoints, triggerRedraw])
+
+  // ── Handlers de Camadas (Layers) ─────────────────────────────────────────
+  const handleToggleLayerOn = (layerName: string, currentlyOn: boolean) => {
+    viewerRef.current?.setLayerOn(layerName, !currentlyOn)
+    refreshMetadata()
+  }
+
+  const handleToggleLayerFrozen = (layerName: string, currentlyFrozen: boolean) => {
+    viewerRef.current?.setLayerFrozen(layerName, !currentlyFrozen)
+    refreshMetadata()
+  }
+
+  const handleToggleLayerLocked = (layerName: string, currentlyLocked: boolean) => {
+    viewerRef.current?.setLayerLocked(layerName, !currentlyLocked)
+    refreshMetadata()
+  }
+
+  const handleIsolateLayer = (layerName: string) => {
+    viewerRef.current?.isolateLayer(layerName)
+    refreshMetadata()
+  }
+
+  const handleTurnAllOn = () => {
+    viewerRef.current?.turnAllLayersOn()
+    refreshMetadata()
+  }
+
+  const handleTurnAllOffExceptCurrent = () => {
+    viewerRef.current?.turnAllLayersOffExceptCurrent()
+    refreshMetadata()
+  }
+
+  const handleThawAll = () => {
+    viewerRef.current?.thawAllLayers()
+    refreshMetadata()
+  }
+
+  // ── Handlers de Layout ───────────────────────────────────────────────────
+  const handleSelectLayout = (layoutName: string) => {
+    setActiveLayout(layoutName)
+    viewerRef.current?.setLayout(layoutName)
+  }
 
   // ── Toolbar helpers ───────────────────────────────────────────────────────
   function activatePan() {
@@ -53,137 +172,356 @@ export default function CADPage() {
     viewerRef.current?.setZoom()
   }
 
+  function activateMeasure() {
+    setActiveMode('measure')
+    setMeasurePoints([])
+  }
+
+  function activateInspect() {
+    setActiveMode('inspect')
+    setShowEntityDrawer(true)
+    setShowLayersDrawer(false)
+  }
+
+  // Captura movimento do mouse para preview da medição
+  const handleCanvasMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (activeMode === 'measure' && viewerRef.current) {
+      const rect = e.currentTarget.getBoundingClientRect()
+      const screenX = e.clientX - rect.left
+      const screenY = e.clientY - rect.top
+      const world = viewerRef.current.screenToWorld(screenX, screenY)
+      setCurrentMouseWorld(world)
+      triggerRedraw()
+    }
+  }
+
   return (
-    <div className="h-full flex flex-col gap-4">
+    <div className="h-full flex flex-col gap-3">
       <PageHeader
-        title="Visualizador DWG/DXF"
-        subtitle="Carregue um arquivo .dwg ou .dxf para visualizar"
+        title="Visualizador CAD Avançado (DWG / DXF)"
+        subtitle="Visualização técnica com gerenciador de layers, layouts de prancha, cotas e inspeção de entidades"
         actions={
-          <label
-            className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium rounded-lg cursor-pointer transition-all"
-            style={{ background: 'var(--orange)', color: 'white', border: '1px solid var(--orange-dark)' }}
-          >
-            <Upload size={14} />
-            {isLoading ? 'Carregando...' : 'Abrir arquivo'}
-            <input
-              type="file"
-              accept=".dwg,.dxf"
-              className="hidden"
-              onChange={handleFileChange}
-              disabled={isLoading}
-            />
-          </label>
+          <div className="flex items-center gap-2">
+            <label
+              className="flex items-center gap-2 px-3 py-1.5 text-xs font-semibold rounded-xl cursor-pointer transition-all shadow-md active:scale-95 text-white"
+              style={{ background: 'linear-gradient(135deg, var(--orange), #c2410c)' }}
+            >
+              <Upload size={14} />
+              {isLoading ? 'Carregando...' : 'Abrir DWG / DXF'}
+              <input
+                type="file"
+                accept=".dwg,.dxf"
+                className="hidden"
+                onChange={handleFileChange}
+                disabled={isLoading}
+              />
+            </label>
+          </div>
         }
       />
 
       {/* ── Toolbar de controles ─────────────────────────────────────────── */}
-      <div className="flex items-center gap-2 flex-wrap">
-        {[
-          {
-            icon: <Move size={15} />,
-            label: 'Pan',
-            active: activeMode === 'pan',
-            onClick: activatePan,
-          },
-          {
-            icon: <ZoomIn size={15} />,
-            label: 'Zoom',
-            active: activeMode === 'zoom',
-            onClick: activateZoom,
-          },
-          {
-            icon: <ZoomIn size={15} />,
-            label: 'Zoom +',
-            active: false,
-            onClick: () => viewerRef.current?.zoomIn(),
-          },
-          {
-            icon: <ZoomOut size={15} />,
-            label: 'Zoom -',
-            active: false,
-            onClick: () => viewerRef.current?.zoomOut(),
-          },
-          {
-            icon: <Maximize2 size={15} />,
-            label: 'Encaixar',
-            active: false,
-            onClick: () => { viewerRef.current?.zoomToFit(); setActiveMode(null) },
-          },
-        ].map(btn => (
+      <div className="flex items-center justify-between gap-2 flex-wrap bg-slate-900/60 p-2 rounded-2xl border border-slate-800 backdrop-blur-sm">
+        <div className="flex items-center gap-1.5 flex-wrap">
+          {/* Navegação */}
           <button
-            key={btn.label}
-            onClick={btn.onClick}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg transition-all"
-            style={{
-              background: btn.active ? 'var(--navy-mid)' : 'var(--surface-card)',
-              color: btn.active ? 'var(--white)' : 'var(--slate)',
-              border: `1px solid ${btn.active ? 'var(--navy-light)' : 'var(--surface-border)'}`,
-            }}
+            onClick={activatePan}
+            className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-xl transition-all border ${
+              activeMode === 'pan'
+                ? 'bg-orange-500 text-white border-orange-400 shadow-md shadow-orange-500/20'
+                : 'bg-slate-800/80 hover:bg-slate-700 text-slate-300 border-slate-700'
+            }`}
+            title="Pan: arrastar para navegar"
           >
-            {btn.icon}
-            {btn.label}
+            <Move size={14} />
+            <span>Pan</span>
           </button>
-        ))}
 
-        {/* Badge do arquivo carregado */}
-        {loadedFile && (
-          <span
-            className="ml-auto text-xs px-2.5 py-1 rounded-lg font-mono"
-            style={{ background: 'rgba(34,197,94,0.1)', color: '#22C55E', border: '1px solid rgba(34,197,94,0.25)' }}
+          <button
+            onClick={activateZoom}
+            className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-xl transition-all border ${
+              activeMode === 'zoom'
+                ? 'bg-orange-500 text-white border-orange-400 shadow-md shadow-orange-500/20'
+                : 'bg-slate-800/80 hover:bg-slate-700 text-slate-300 border-slate-700'
+            }`}
+            title="Zoom por janela"
           >
-            ✓ {loadedFile}
-          </span>
-        )}
+            <ZoomIn size={14} />
+            <span>Zoom Janela</span>
+          </button>
 
-        {error && (
-          <span
-            className="ml-auto text-xs px-2.5 py-1 rounded-lg"
-            style={{ background: 'rgba(239,68,68,0.1)', color: '#EF4444', border: '1px solid rgba(239,68,68,0.25)' }}
+          <div className="h-4 w-px bg-slate-800 mx-1" />
+
+          {/* Medição 2D */}
+          <button
+            onClick={activateMeasure}
+            className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-xl transition-all border ${
+              activeMode === 'measure'
+                ? 'bg-orange-500 text-white border-orange-400 shadow-md shadow-orange-500/20'
+                : 'bg-slate-800/80 hover:bg-slate-700 text-slate-300 border-slate-700'
+            }`}
+            title="Modo Medir Cota 2D"
           >
-            {error}
-          </span>
-        )}
+            <Ruler size={14} />
+            <span>Medir Cota</span>
+          </button>
+
+          {/* Inspecionar Entidade */}
+          <button
+            onClick={activateInspect}
+            className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-xl transition-all border ${
+              activeMode === 'inspect'
+                ? 'bg-orange-500 text-white border-orange-400 shadow-md shadow-orange-500/20'
+                : 'bg-slate-800/80 hover:bg-slate-700 text-slate-300 border-slate-700'
+            }`}
+            title="Inspecionar elementos clicados"
+          >
+            <Info size={14} />
+            <span>Inspecionar</span>
+          </button>
+
+          {/* Gerenciador de Camadas */}
+          <button
+            onClick={() => {
+              setShowLayersDrawer(p => !p)
+              setShowEntityDrawer(false)
+            }}
+            className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-xl transition-all border ${
+              showLayersDrawer
+                ? 'bg-orange-500 text-white border-orange-400 shadow-md shadow-orange-500/20'
+                : 'bg-slate-800/80 hover:bg-slate-700 text-slate-300 border-slate-700'
+            }`}
+            title="Abrir Gerenciador de Camadas (Layers)"
+          >
+            <Layers size={14} />
+            <span>Camadas ({layers.length})</span>
+          </button>
+
+          <div className="h-4 w-px bg-slate-800 mx-1" />
+
+          {/* Zoom Steps */}
+          <button
+            onClick={() => viewerRef.current?.zoomIn()}
+            className="p-1.5 rounded-xl bg-slate-800/80 hover:bg-slate-700 text-slate-300 border border-slate-700 transition-colors"
+            title="Aproximar Zoom"
+          >
+            <ZoomIn size={14} />
+          </button>
+          <button
+            onClick={() => viewerRef.current?.zoomOut()}
+            className="p-1.5 rounded-xl bg-slate-800/80 hover:bg-slate-700 text-slate-300 border border-slate-700 transition-colors"
+            title="Afastar Zoom"
+          >
+            <ZoomOut size={14} />
+          </button>
+          <button
+            onClick={() => {
+              viewerRef.current?.zoomToFit()
+              setActiveMode('pan')
+            }}
+            className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-slate-800/80 hover:bg-slate-700 text-slate-300 border border-slate-700 transition-colors text-xs font-medium"
+            title="Enquadrar desenho no centro"
+          >
+            <Maximize2 size={14} />
+            <span>Enquadrar</span>
+          </button>
+        </div>
+
+        {/* Status / File Name */}
+        <div className="flex items-center gap-2">
+          {loadedFile && (
+            <span className="text-xs px-2.5 py-1 rounded-xl font-mono bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 flex items-center gap-1.5">
+              <CheckCircle2 size={13} /> {loadedFile}
+            </span>
+          )}
+
+          {error && (
+            <span className="text-xs px-2.5 py-1 rounded-xl bg-red-500/10 text-red-400 border border-red-500/30 flex items-center gap-1.5">
+              <AlertCircle size={13} /> {error}
+            </span>
+          )}
+        </div>
       </div>
 
       {/* ── Canvas do viewer ─────────────────────────────────────────────── */}
       <div
-        className="flex-1 rounded-xl overflow-hidden relative flex items-center justify-center bg-[#0d1825]"
-        style={{ border: '1px solid var(--surface-border)', minHeight: 450 }}
+        className="flex-1 rounded-2xl overflow-hidden relative flex items-center justify-center bg-[#0f1923] border border-slate-800 shadow-2xl"
+        onMouseMove={handleCanvasMouseMove}
+        style={{ minHeight: 520 }}
       >
         {isLoading && (
-          <div className="absolute inset-0 bg-[#0d1825]/85 backdrop-blur-xs flex flex-col items-center justify-center z-30">
-            <Loader2 className="animate-spin text-orange-500 mb-3" size={36} />
-            <span className="text-xs text-slate-400">Processando geometria DWG...</span>
+          <div className="absolute inset-0 bg-[#0f1923]/90 backdrop-blur-sm flex flex-col items-center justify-center z-40">
+            <Loader2 className="animate-spin text-orange-500 mb-3" size={40} />
+            <span className="text-sm font-semibold text-white">Processando desenho CAD e camadas...</span>
+            <span className="text-xs text-slate-400 mt-1">Isso pode levar alguns segundos dependendo da complexidade</span>
           </div>
         )}
 
+        {/* Banner Modo Medir Ativo */}
+        {activeMode === 'measure' && (
+          <div className="absolute top-3 left-3 flex items-center gap-2 px-3.5 py-1.5 rounded-xl bg-slate-900/90 border border-slate-700 shadow-xl text-xs z-30 text-white backdrop-blur-md">
+            <Ruler size={14} className="text-orange-400" />
+            <span className="font-bold">Modo Medição 2D:</span>
+            <span className="text-slate-300">
+              {measurePoints.length === 0 ? 'Clique no 1º ponto para iniciar a cota' : 'Clique no 2º ponto para finalizar'}
+            </span>
+            {activeMeasurements.length > 0 && (
+              <button
+                onClick={() => {
+                  measurementManagerRef.current.clearAll()
+                  setActiveMeasurements([])
+                  setMeasurePoints([])
+                }}
+                className="ml-2 text-xs text-red-400 hover:text-red-300 font-semibold flex items-center gap-1"
+              >
+                <Trash2 size={12} /> Limpar Cotas ({activeMeasurements.length})
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* SVG Overlay para desenho das linhas de cota 2D */}
+        {viewerRef.current && (activeMeasurements.length > 0 || measurePoints.length > 0) && (
+          <svg className="absolute inset-0 pointer-events-none z-20 w-full h-full">
+            <defs>
+              <marker id="cad-arrow" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                <path d="M 0 0 L 10 5 L 0 10 z" fill="#f97316" />
+              </marker>
+            </defs>
+
+            {/* Medições confirmadas */}
+            {activeMeasurements.map(m => {
+              const p1Screen = viewerRef.current?.worldToScreen(m.startWorld.x, m.startWorld.y)
+              const p2Screen = viewerRef.current?.worldToScreen(m.endWorld.x, m.endWorld.y)
+              if (!p1Screen || !p2Screen) return null
+
+              const midX = (p1Screen.x + p2Screen.x) / 2
+              const midY = (p1Screen.y + p2Screen.y) / 2
+
+              return (
+                <g key={m.id}>
+                  {/* Linha da cota */}
+                  <line
+                    x1={p1Screen.x}
+                    y1={p1Screen.y}
+                    x2={p2Screen.x}
+                    y2={p2Screen.y}
+                    stroke="#f97316"
+                    strokeWidth="2.5"
+                    markerStart="url(#cad-arrow)"
+                    markerEnd="url(#cad-arrow)"
+                  />
+                  {/* Marcadores pontuais */}
+                  <circle cx={p1Screen.x} cy={p1Screen.y} r="4" fill="#22c55e" stroke="#ffffff" strokeWidth="1.5" />
+                  <circle cx={p2Screen.x} cy={p2Screen.y} r="4" fill="#22c55e" stroke="#ffffff" strokeWidth="1.5" />
+                  {/* Etiqueta da distância */}
+                  <g transform={`translate(${midX}, ${midY - 12})`}>
+                    <rect
+                      x="-38"
+                      y="-12"
+                      width="76"
+                      height="24"
+                      rx="6"
+                      fill="#0f1923"
+                      stroke="#f97316"
+                      strokeWidth="1.5"
+                    />
+                    <text
+                      x="0"
+                      y="4"
+                      textAnchor="middle"
+                      fill="#ffffff"
+                      fontSize="11"
+                      fontWeight="bold"
+                      fontFamily="monospace"
+                    >
+                      {m.label}
+                    </text>
+                  </g>
+                </g>
+              )
+            })}
+
+            {/* Preview dinâmico do 1º ponto até o cursor atual */}
+            {measurePoints.length > 0 && currentMouseWorld && (
+              (() => {
+                const p1Screen = viewerRef.current?.worldToScreen(measurePoints[0].x, measurePoints[0].y)
+                const p2Screen = viewerRef.current?.worldToScreen(currentMouseWorld.x, currentMouseWorld.y)
+                if (!p1Screen || !p2Screen) return null
+
+                const dx = currentMouseWorld.x - measurePoints[0].x
+                const dy = currentMouseWorld.y - measurePoints[0].y
+                const dist = Math.hypot(dx, dy)
+                const midX = (p1Screen.x + p2Screen.x) / 2
+                const midY = (p1Screen.y + p2Screen.y) / 2
+
+                return (
+                  <g>
+                    <line
+                      x1={p1Screen.x}
+                      y1={p1Screen.y}
+                      x2={p2Screen.x}
+                      y2={p2Screen.y}
+                      stroke="#f97316"
+                      strokeWidth="2"
+                      strokeDasharray="4 4"
+                    />
+                    <circle cx={p1Screen.x} cy={p1Screen.y} r="4" fill="#22c55e" stroke="#ffffff" strokeWidth="1.5" />
+                    <circle cx={p2Screen.x} cy={p2Screen.y} r="4" fill="#f97316" stroke="#ffffff" strokeWidth="1.5" />
+                    <g transform={`translate(${midX}, ${midY - 12})`}>
+                      <rect
+                        x="-38"
+                        y="-12"
+                        width="76"
+                        height="24"
+                        rx="6"
+                        fill="#0f1923"
+                        stroke="#f97316"
+                        strokeWidth="1.5"
+                      />
+                      <text
+                        x="0"
+                        y="4"
+                        textAnchor="middle"
+                        fill="#ffffff"
+                        fontSize="11"
+                        fontWeight="bold"
+                        fontFamily="monospace"
+                      >
+                        {dist.toFixed(2)} m
+                      </text>
+                    </g>
+                  </g>
+                )
+              })()
+            )}
+          </svg>
+        )}
+
+        {/* Placeholder quando nenhum arquivo está aberto */}
         {!loadedFile && !isLoading && (
           <div
             className="absolute inset-0 flex flex-col items-center justify-center z-20 p-4"
-            style={{ background: 'rgba(15,25,35,0.9)', backdropFilter: 'blur(4px)' }}
+            style={{ background: 'rgba(15,25,35,0.92)', backdropFilter: 'blur(6px)' }}
           >
-            <div
-              className="flex flex-col items-center gap-3 p-8 rounded-2xl w-full max-w-sm"
-              style={{
-                background: 'var(--surface-card)',
-                border: '2px dashed var(--surface-border)',
-              }}
-            >
-              <Upload size={36} style={{ color: 'var(--slate)' }} />
+            <div className="flex flex-col items-center gap-3 p-8 rounded-3xl w-full max-w-sm bg-slate-900/90 border border-slate-800 shadow-2xl">
+              <div className="w-16 h-16 rounded-2xl bg-orange-500/10 border border-orange-500/30 flex items-center justify-center text-orange-400">
+                <Upload size={32} />
+              </div>
               <div className="text-center">
-                <div className="text-sm font-semibold" style={{ color: 'var(--white)' }}>
+                <div className="text-base font-bold text-white">
                   Carregar desenho DWG/DXF
                 </div>
-                <div className="text-xs mt-1" style={{ color: 'var(--slate)' }}>
-                  Arraste o arquivo ou use as opções abaixo
+                <div className="text-xs mt-1 text-slate-400">
+                  Visualização de plantas baixas, cortes e pranchas completas
                 </div>
               </div>
-              <div className="flex flex-col gap-2 w-full mt-2">
+              <div className="flex flex-col gap-2 w-full mt-3">
                 <label
-                  className="text-center text-xs px-3 py-2 rounded-lg font-medium cursor-pointer transition-all hover:bg-orange-600 block"
-                  style={{ background: 'var(--orange)', color: 'white' }}
+                  className="text-center text-xs px-4 py-2.5 rounded-xl font-bold cursor-pointer transition-all hover:opacity-90 active:scale-95 block text-white shadow-lg shadow-orange-500/20"
+                  style={{ background: 'linear-gradient(135deg, var(--orange), #c2410c)' }}
                 >
-                  Selecionar arquivo CAD
+                  Selecionar arquivo do computador
                   <input
                     type="file"
                     accept=".dwg,.dxf"
@@ -209,7 +547,7 @@ export default function CADPage() {
                       setIsLoading(false)
                     }
                   }}
-                  className="text-xs px-3 py-2 rounded-lg font-medium border border-orange-500/40 text-orange-400 hover:bg-orange-500/10 cursor-pointer transition-all block w-full"
+                  className="text-xs px-4 py-2.5 rounded-xl font-semibold border border-orange-500/40 text-orange-400 hover:bg-orange-500/10 cursor-pointer transition-all block w-full"
                 >
                   Carregar Prancha de Teste DWG
                 </button>
@@ -218,42 +556,76 @@ export default function CADPage() {
           </div>
         )}
 
+        {/* Visualizador CAD */}
         <CADViewer
           ref={viewerRef}
           containerClassName="w-full h-full"
           background={0x0f1923}
-          onFileLoaded={name => setLoadedFile(name)}
+          onFileLoaded={name => {
+            setLoadedFile(name)
+            refreshMetadata()
+          }}
           onLoadError={(err, name) => setError(`Erro ao abrir "${name}": ${err.message}`)}
           onCanvasClick={handleCanvasClick}
         />
+
+        {/* Barra Inferior de Layouts (Model Space vs Paper Space) */}
+        {loadedFile && (
+          <CADLayoutsBar
+            layouts={layouts}
+            activeLayout={activeLayout}
+            onSelectLayout={handleSelectLayout}
+          />
+        )}
+
+        {/* Gaveta de Camadas (Layers) */}
+        {showLayersDrawer && (
+          <CADLayersDrawer
+            layers={layers}
+            onToggleLayerOn={handleToggleLayerOn}
+            onToggleLayerFrozen={handleToggleLayerFrozen}
+            onToggleLayerLocked={handleToggleLayerLocked}
+            onIsolateLayer={handleIsolateLayer}
+            onTurnAllOn={handleTurnAllOn}
+            onTurnAllOffExceptCurrent={handleTurnAllOffExceptCurrent}
+            onThawAll={handleThawAll}
+            onClose={() => setShowLayersDrawer(false)}
+          />
+        )}
+
+        {/* Gaveta de Inspeção de Entidade */}
+        {showEntityDrawer && (
+          <CADEntityDrawer
+            entity={selectedEntity}
+            onClose={() => setShowEntityDrawer(false)}
+          />
+        )}
       </div>
 
-      {/* ── Display de coordenadas do último clique ───────────────────────── */}
-      {lastClick && (
-        <div
-          className="flex items-center gap-4 px-4 py-2.5 rounded-lg text-xs font-mono"
-          style={{
-            background: 'var(--surface-card)',
-            border: '1px solid var(--surface-border)',
-            color: 'var(--slate)',
-          }}
-        >
-          <MousePointer2 size={13} style={{ color: 'var(--orange)', flexShrink: 0 }} />
-          <span>
-            Tela: <span style={{ color: 'var(--white)' }}>
-              x={lastClick.screenX.toFixed(0)}px, y={lastClick.screenY.toFixed(0)}px
+      {/* ── Barra de Status e Coordenadas ─────────────────────────────────── */}
+      <div className="flex items-center justify-between px-4 py-2.5 rounded-xl bg-slate-900/80 border border-slate-800 text-xs font-mono text-slate-400">
+        <div className="flex items-center gap-4">
+          <div className="flex items-center gap-1.5 text-slate-300">
+            <MousePointer2 size={13} className="text-orange-400" />
+            <span>Coordenadas WCS:</span>
+            <span className="text-orange-400 font-bold">
+              {lastClick ? `X=${lastClick.worldX.toFixed(3)}, Y=${lastClick.worldY.toFixed(3)}` : 'X=0.000, Y=0.000'}
             </span>
-          </span>
-          <span>
-            Modelo CAD: <span style={{ color: 'var(--orange)' }}>
-              X={lastClick.worldX.toFixed(4)}, Y={lastClick.worldY.toFixed(4)}
+          </div>
+
+          {lastClick && (
+            <span className="text-slate-500 text-[11px]">
+              (Pixel: {lastClick.screenX.toFixed(0)}px, {lastClick.screenY.toFixed(0)}px)
             </span>
-          </span>
-          <span className="ml-auto" style={{ color: '#334155', fontSize: '10px' }}>
-            (coordenadas prontas para fixar pins de issue)
-          </span>
+          )}
         </div>
-      )}
+
+        <div className="flex items-center gap-3 text-[11px] text-slate-500">
+          <span>Modo: <strong className="text-slate-300 uppercase">{activeMode || 'Navegar'}</strong></span>
+          <span>•</span>
+          <span>Layout: <strong className="text-orange-400">{activeLayout}</strong></span>
+        </div>
+      </div>
     </div>
   )
 }

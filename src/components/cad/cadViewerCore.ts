@@ -3,13 +3,14 @@
  * ─────────────────────────────────────────────────────────────────────────
  * Módulo de inicialização e controle do visualizador DWG/DXF.
  *
- * ESCOPO: apenas lógica e inicialização do canvas — sem JSX, sem layout,
- * sem estilos do projeto. Expõe uma API imperativa simples que o componente
- * React (CADViewer.tsx) ou qualquer outro consumer pode chamar.
+ * ESCOPO: lógica e inicialização do canvas CAD — expõe uma API imperativa
+ * rica para o componente React (CADViewer.tsx / CADPage.tsx):
+ * - Gerenciamento de Camadas (Layers)
+ * - Layouts (Model Space vs Paper Space)
+ * - Coordenadas reais de engenharia (WCS)
+ * - Inspeção e picking de entidades
  *
- * Dependência: @mlightcad/cad-simple-viewer (MIT, framework-agnostic)
- * Workers necessários em /public/cad-workers/ (copiados automaticamente
- * durante o setup — veja vite.config.ts ou o script copy-workers).
+ * Dependência: @mlightcad/cad-simple-viewer
  * ─────────────────────────────────────────────────────────────────────────
  */
 
@@ -18,12 +19,12 @@ import {
   AcEdOpenMode,
   type AcApDocManagerOptions,
   type AcApWebworkerFiles,
+  type AcApLayerSummary,
 } from '@mlightcad/cad-simple-viewer'
+import type { SelectedCADEntity } from './CADEntityDrawer'
+import type { CADLayoutItem } from './CADLayoutsBar'
 
 // ─── Worker URLs ──────────────────────────────────────────────────────────────
-// Os três workers precisam estar acessíveis via URL pública.
-// No Vite, arquivos em /public são servidos na raiz — daí o prefixo /cad-workers/.
-// Em produção (Vercel) esses arquivos ficam no CDN automaticamente.
 const WORKER_URLS: AcApWebworkerFiles = {
   dxfParser:   new URL('/cad-workers/dxf-parser-worker.js',    import.meta.url),
   dwgParser:   new URL('/cad-workers/libredwg-parser-worker.js', import.meta.url),
@@ -32,80 +33,51 @@ const WORKER_URLS: AcApWebworkerFiles = {
 
 // ─── Public types ─────────────────────────────────────────────────────────────
 
-/** Coordenadas locais do canvas retornadas no evento de clique. */
 export interface CADCanvasClickEvent {
-  /** X em pixels relativos ao canto superior-esquerdo do canvas */
   screenX: number
-  /** Y em pixels relativos ao canto superior-esquerdo do canvas */
   screenY: number
-  /** X no espaço de coordenadas do modelo CAD */
   worldX: number
-  /** Y no espaço de coordenadas do modelo CAD */
   worldY: number
-  /** Evento DOM original, útil para detectar modificadores (shift, ctrl) */
   originalEvent: MouseEvent
 }
 
 export type CADClickHandler = (event: CADCanvasClickEvent) => void
 
 export interface CADViewerInstance {
-  /** Carrega um ArrayBuffer de arquivo DWG ou DXF */
   loadFile: (fileName: string, buffer: ArrayBuffer) => Promise<boolean>
-  /** Ativa o modo Pan (arrastar para mover) */
   setPan: () => void
-  /** Ativa o modo Zoom window (clicar para zoom retangular) */
   setZoom: () => void
-  /** Zoom para encaixar todo o desenho no canvas */
   zoomToFit: () => void
-  /** Zoom in passo a passo */
   zoomIn: () => void
-  /** Zoom out passo a passo */
   zoomOut: () => void
-  /** Registra um handler para cliques no canvas */
   onClick: (handler: CADClickHandler) => () => void
-  /** Força um redimensionamento do canvas para o tamanho atual do container */
   resize: () => void
-  /** Destrói o viewer e libera todos os recursos */
   dispose: () => void
-  /** Referência ao AcApDocManager, para acesso avançado quando necessário */
   manager: AcApDocManager
+
+  // ── Etapa 2: APIs Avançadas de Camadas, Layouts e Inspeção ──
+  getLayerSummaries: () => AcApLayerSummary[]
+  setLayerOn: (layerName: string, isOn: boolean) => void
+  setLayerFrozen: (layerName: string, isFrozen: boolean) => void
+  setLayerLocked: (layerName: string, isLocked: boolean) => void
+  isolateLayer: (layerName: string) => void
+  turnAllLayersOn: () => void
+  turnAllLayersOffExceptCurrent: () => void
+  thawAllLayers: () => void
+  getLayouts: () => CADLayoutItem[]
+  setLayout: (layoutName: string) => void
+  pickEntity: (screenX: number, screenY: number) => SelectedCADEntity | null
+  screenToWorld: (screenX: number, screenY: number) => { x: number; y: number }
+  worldToScreen: (worldX: number, worldY: number) => { x: number; y: number }
 }
 
-// ─── Init ─────────────────────────────────────────────────────────────────────
-
 export interface CADViewerInitOptions {
-  /** Elemento HTML que vai conter o canvas WebGL */
   container: HTMLElement
-  /**
-   * Cor de fundo em hexadecimal numérico.
-   * @default 0x1C2B3A  (surface-card do design system do IncorProjetos)
-   */
   background?: number
-  /**
-   * Se true, o canvas redimensiona automaticamente quando o container muda.
-   * @default true
-   */
   autoResize?: boolean
-  /**
-   * URL base para carregar fontes e templates do viewer.
-   * Se omitida, usa a URL pública padrão do pacote.
-   */
   baseUrl?: string
 }
 
-/**
- * Inicializa o visualizador CAD no container informado.
- *
- * @example
- * ```ts
- * const viewer = await initCADViewer({ container: divRef.current! })
- * viewer.loadFile('planta.dwg', arrayBuffer)
- * viewer.onClick(({ screenX, screenY, worldX, worldY }) => {
- *   console.log('Clique em tela:', screenX, screenY)
- *   console.log('Coordenadas CAD:', worldX, worldY)
- * })
- * ```
- */
 export async function initCADViewer(opts: CADViewerInitOptions): Promise<CADViewerInstance> {
   const {
     container,
@@ -113,8 +85,7 @@ export async function initCADViewer(opts: CADViewerInitOptions): Promise<CADView
     autoResize = true,
   } = opts
 
-  // ── 1. Verificar que os workers estão acessíveis antes de criar o manager ──
-  // HEAD request leve (não baixa o worker de 13MB desnecessariamente)
+  // 1. Verificar workers
   const workersOk = await AcApDocManager.checkWebworkerReadiness(WORKER_URLS)
   if (!workersOk) {
     throw new Error(
@@ -123,13 +94,11 @@ export async function initCADViewer(opts: CADViewerInitOptions): Promise<CADView
     )
   }
 
-  // ── 2. Criar o manager (singleton que controla o ciclo de vida do documento) ─
+  // 2. Criar manager
   const managerOptions: AcApDocManagerOptions = {
     container,
     autoResize,
     webworkerFileUrls: WORKER_URLS,
-    // Não instalamos o diálogo de abertura embutido — o controle de arquivo
-    // fica no nosso próprio FileReader / input[type=file]
     builtinOpenFileDialog: false,
   }
 
@@ -139,21 +108,14 @@ export async function initCADViewer(opts: CADViewerInitOptions): Promise<CADView
     throw new Error('[CADViewer] AcApDocManager.createInstance() retornou undefined.')
   }
 
-  // ── 3. Aplicar cor de fundo ao canvas ───────────────────────────────────────
-  // O canvas é adicionado ao container pelo manager; esperamos um tick para
-  // que ele esteja no DOM antes de acessar o curView.
+  // 3. Background
   await nextTick()
   const view = manager.curView
-  if (view) {
-    // background é uma sysvar interna; acesso via canvas style é mais seguro
-    // para o caso de o sysvar name mudar entre versões
-    if (view.canvas) {
-      view.canvas.style.background = `#${background.toString(16).padStart(6, '0')}`
-    }
+  if (view && view.canvas) {
+    view.canvas.style.background = `#${background.toString(16).padStart(6, '0')}`
   }
 
-  // ── 4. Click handler com conversão screen → world ──────────────────────────
-  // Usamos um Set de handlers para suportar múltiplos registros
+  // 4. Click Handler
   const clickHandlers = new Set<CADClickHandler>()
 
   function handleCanvasClick(e: MouseEvent) {
@@ -164,7 +126,6 @@ export async function initCADViewer(opts: CADViewerInitOptions): Promise<CADView
     const screenX = e.clientX - rect.left
     const screenY = e.clientY - rect.top
 
-    // Converte coordenadas de tela para o sistema de coordenadas do modelo CAD
     let worldX = screenX
     let worldY = screenY
     const currentView = manager.curView
@@ -173,50 +134,38 @@ export async function initCADViewer(opts: CADViewerInitOptions): Promise<CADView
         const world = currentView.screenToWorld({ x: screenX, y: screenY })
         worldX = world.x
         worldY = world.y
-      } catch {
-        // screenToWorld pode falhar antes do documento estar carregado — silencia
-      }
+      } catch { /* silence */ }
     }
 
     const event: CADCanvasClickEvent = { screenX, screenY, worldX, worldY, originalEvent: e }
     clickHandlers.forEach(h => h(event))
   }
 
-  // Registra no container em vez do canvas para capturar mesmo antes de carregar arquivo
   container.addEventListener('click', handleCanvasClick)
 
-  // ── 5. Scroll para zoom (nativo do viewer via sendStringToExecute não tem
-  //     scroll binding fácil; usamos wheel event para chamar zoom step) ────────
+  // 5. Scroll Zoom
   function handleWheel(e: WheelEvent) {
     e.preventDefault()
-    // Zoom in/out: delta negativo = zoom in (scroll pra cima)
     const cmd = e.deltaY < 0 ? 'zoomin' : 'zoomout'
     try {
       manager.sendStringToExecute(cmd)
-    } catch {
-      // silencia se não houver documento carregado
-    }
+    } catch { /* silence */ }
   }
   container.addEventListener('wheel', handleWheel, { passive: false })
 
-  // ── 6. API pública ────────────────────────────────────────────────────────
-
+  // 6. Funções de Carregamento e Navegação
   async function loadFile(fileName: string, buffer: ArrayBuffer): Promise<boolean> {
-    // Extract original extension (.dwg or .dxf)
     const isDxf = fileName.toLowerCase().endsWith('.dxf')
     const virtualFileName = isDxf ? 'model.dxf' : 'model.dwg'
-
     const doc = manager.curDocument
     let lastError: string | null = null
 
     const handleProgress = (args: any) => {
-      console.log(`[CADProgress] Stage: ${args.stage}, SubStage: ${args.subStage}, Status: ${args.subStageStatus}, %: ${args.percentage}, Data:`, args.data)
       if (args.subStageStatus === 'ERROR') {
-        lastError = args.data || 'Erro interno desconhecido na decodificação do desenho.'
+        lastError = args.data || 'Erro interno na decodificação do desenho CAD.'
       }
     }
 
-    // Register progress listener to capture internal errors
     if (doc?.database?.events?.openProgress?.addEventListener) {
       doc.database.events.openProgress.addEventListener(handleProgress)
     }
@@ -227,9 +176,6 @@ export async function initCADViewer(opts: CADViewerInitOptions): Promise<CADView
     }
 
     try {
-      // Pass a safe ASCII virtual name to bypass Emscripten/LibreDWG WASM filesystem 
-      // crashes on accented or special unicode characters (like Á, É, Ç)
-      // Pass noopFontLoader to prevent falling back to the broken default font loader CDN
       const success = await manager.openDocument(virtualFileName, buffer, {
         mode: AcEdOpenMode.Read,
         progressiveRendering: true,
@@ -241,7 +187,6 @@ export async function initCADViewer(opts: CADViewerInitOptions): Promise<CADView
       }
       return success
     } finally {
-      // Always cleanup event listener
       if (doc?.database?.events?.openProgress?.removeEventListener) {
         doc.database.events.openProgress.removeEventListener(handleProgress)
       }
@@ -249,51 +194,264 @@ export async function initCADViewer(opts: CADViewerInitOptions): Promise<CADView
   }
 
   function setPan() {
-    try { manager.sendStringToExecute('pan') } catch { /* nenhum doc ainda */ }
+    try { manager.sendStringToExecute('pan') } catch { /* silence */ }
   }
 
   function setZoom() {
-    try { manager.sendStringToExecute('zoom') } catch { /* nenhum doc ainda */ }
+    try { manager.sendStringToExecute('zoom') } catch { /* silence */ }
   }
 
   function zoomToFit() {
-    try { manager.sendStringToExecute('zoom e') } catch { /* nenhum doc ainda */ }
+    try { manager.sendStringToExecute('zoom e') } catch { /* silence */ }
   }
 
   function zoomIn() {
-    try { manager.sendStringToExecute('zoomin') } catch { /* nenhum doc ainda */ }
+    try { manager.sendStringToExecute('zoomin') } catch { /* silence */ }
   }
 
   function zoomOut() {
-    try { manager.sendStringToExecute('zoomout') } catch { /* nenhum doc ainda */ }
+    try { manager.sendStringToExecute('zoomout') } catch { /* silence */ }
   }
 
   function onClick(handler: CADClickHandler): () => void {
     clickHandlers.add(handler)
-    return () => clickHandlers.delete(handler)   // retorna cleanup function
+    return () => clickHandlers.delete(handler)
   }
 
   function resize() {
-    // autoResize: true já cuida do redimensionamento via ResizeObserver interno.
-    // Este método existe para compatibilidade com a interface pública; é no-op
-    // quando autoResize está ativo, mas pode ser usado para forçar um redraw.
     try {
-      const view = manager.curView
-      if (view) view.isDirty = true
-    } catch { /* silencia */ }
+      const v = manager.curView
+      if (v) v.isDirty = true
+    } catch { /* silence */ }
+  }
+
+  // ── Etapa 2: Gerenciador de Camadas (Layers) ────────────────────────────────
+  function getLayerSummaries(): AcApLayerSummary[] {
+    const doc = manager.curDocument
+    if (!doc?.layerService) return []
+    try {
+      return doc.layerService.getLayerSummaries() || []
+    } catch (err) {
+      console.warn('[CADViewerCore] getLayerSummaries error:', err)
+      return []
+    }
+  }
+
+  function setLayerOn(layerName: string, isOn: boolean) {
+    const doc = manager.curDocument
+    if (!doc?.layerService) return
+    try {
+      doc.layerService.setLayerOn(layerName, isOn, { switchCurrentLayer: true })
+      manager.regen()
+    } catch (err) {
+      console.warn('[CADViewerCore] setLayerOn error:', err)
+    }
+  }
+
+  function setLayerFrozen(layerName: string, isFrozen: boolean) {
+    const doc = manager.curDocument
+    if (!doc?.layerService) return
+    try {
+      doc.layerService.setLayerFrozen(layerName, isFrozen, { switchCurrentLayer: true })
+      manager.regen()
+    } catch (err) {
+      console.warn('[CADViewerCore] setLayerFrozen error:', err)
+    }
+  }
+
+  function setLayerLocked(layerName: string, isLocked: boolean) {
+    const doc = manager.curDocument
+    if (!doc?.layerService) return
+    try {
+      doc.layerService.setLayerLocked(layerName, isLocked)
+    } catch (err) {
+      console.warn('[CADViewerCore] setLayerLocked error:', err)
+    }
+  }
+
+  function isolateLayer(layerName: string) {
+    const doc = manager.curDocument
+    if (!doc?.layerService) return
+    try {
+      doc.layerService.isolateSingleLayer(layerName)
+      manager.regen()
+    } catch (err) {
+      console.warn('[CADViewerCore] isolateLayer error:', err)
+    }
+  }
+
+  function turnAllLayersOn() {
+    const doc = manager.curDocument
+    if (!doc?.layerService) return
+    try {
+      doc.layerService.setAllLayersOn()
+      manager.regen()
+    } catch (err) {
+      console.warn('[CADViewerCore] turnAllLayersOn error:', err)
+    }
+  }
+
+  function turnAllLayersOffExceptCurrent() {
+    const doc = manager.curDocument
+    if (!doc?.layerService) return
+    try {
+      doc.layerService.setAllLayersOffExceptCurrent()
+      manager.regen()
+    } catch (err) {
+      console.warn('[CADViewerCore] turnAllLayersOffExceptCurrent error:', err)
+    }
+  }
+
+  function thawAllLayers() {
+    const doc = manager.curDocument
+    if (!doc?.layerService) return
+    try {
+      doc.layerService.thawAllLayers()
+      manager.regen()
+    } catch (err) {
+      console.warn('[CADViewerCore] thawAllLayers error:', err)
+    }
+  }
+
+  // ── Etapa 2: Layouts (Model Space vs Paper Space) ───────────────────────────
+  function getLayouts(): CADLayoutItem[] {
+    const doc = manager.curDocument
+    const layouts: CADLayoutItem[] = [
+      { name: 'Model', isModel: true },
+    ]
+    if (!doc?.database) return layouts
+
+    try {
+      // Extrai nomes de layouts se disponíveis
+      const db = doc.database as any
+      if (db.layoutManager?.layouts) {
+        const customLayouts = Object.keys(db.layoutManager.layouts)
+        if (customLayouts.length > 0) {
+          return customLayouts.map(name => ({
+            name,
+            isModel: name.toLowerCase() === 'model',
+          }))
+        }
+      }
+    } catch { /* fallback to standard model */ }
+
+    return layouts
+  }
+
+  function setLayout(layoutName: string) {
+    try {
+      manager.sendStringToExecute(`layout set ${layoutName}`)
+      setTimeout(() => {
+        zoomToFit()
+      }, 100)
+    } catch (err) {
+      console.warn('[CADViewerCore] setLayout error:', err)
+    }
+  }
+
+  // ── Etapa 2: Inspeção de Entidades CAD (Picking) ────────────────────────────
+  function pickEntity(screenX: number, screenY: number): SelectedCADEntity | null {
+    const v = manager.curView
+    const doc = manager.curDocument
+    if (!v || !doc) return null
+
+    try {
+      const hits = v.pick({ x: screenX, y: screenY }, 12, true)
+      if (hits && hits.length > 0) {
+        const hit = hits[0]
+        const objId = hit.id
+        const entity: any = (objId as any)?.open ? (objId as any).open(AcEdOpenMode.Read) : (doc.database as any)?.getObject?.(objId) || objId
+        const entityType = entity?.dxfTypeName || entity?.constructor?.name || (objId as any)?.dxfTypeName || 'Entidade CAD'
+        const layerName = entity?.layer || (entity?.layerId as any)?.name || '0'
+        const handle = entity?.handle || (objId as any)?.handle || ''
+        const text = entity?.text || entity?.contents || entity?.plainText || ''
+        let length: number | undefined = undefined
+
+        if (typeof entity?.length === 'number') {
+          length = entity.length
+        } else if (entity?.startPoint && entity?.endPoint) {
+          const dx = entity.endPoint.x - entity.startPoint.x
+          const dy = entity.endPoint.y - entity.startPoint.y
+          length = Math.hypot(dx, dy)
+        }
+
+        const box = {
+          minX: hit.minX ?? 0,
+          minY: hit.minY ?? 0,
+          maxX: hit.maxX ?? 0,
+          maxY: hit.maxY ?? 0,
+        }
+
+        return {
+          handle,
+          entityType,
+          layerName,
+          text: text || undefined,
+          length,
+          box,
+        }
+      }
+    } catch (err) {
+      console.warn('[CADViewerCore] pickEntity error:', err)
+    }
+    return null
+  }
+
+  function screenToWorld(screenX: number, screenY: number): { x: number; y: number } {
+    const v = manager.curView
+    if (v?.screenToWorld) {
+      try {
+        const pt = v.screenToWorld({ x: screenX, y: screenY })
+        return { x: pt.x, y: pt.y }
+      } catch { /* silence */ }
+    }
+    return { x: screenX, y: screenY }
+  }
+
+  function worldToScreen(worldX: number, worldY: number): { x: number; y: number } {
+    const v = manager.curView
+    if (v?.worldToScreen) {
+      try {
+        const pt = v.worldToScreen({ x: worldX, y: worldY })
+        return { x: pt.x, y: pt.y }
+      } catch { /* silence */ }
+    }
+    return { x: worldX, y: worldY }
   }
 
   function dispose() {
     container.removeEventListener('click', handleCanvasClick)
     container.removeEventListener('wheel', handleWheel)
     clickHandlers.clear()
-    try { manager.destroy?.() } catch { /* silencia */ }
+    try { manager.destroy?.() } catch { /* silence */ }
   }
 
-  return { loadFile, setPan, setZoom, zoomToFit, zoomIn, zoomOut, onClick, resize, dispose, manager }
+  return {
+    loadFile,
+    setPan,
+    setZoom,
+    zoomToFit,
+    zoomIn,
+    zoomOut,
+    onClick,
+    resize,
+    dispose,
+    manager,
+    getLayerSummaries,
+    setLayerOn,
+    setLayerFrozen,
+    setLayerLocked,
+    isolateLayer,
+    turnAllLayersOn,
+    turnAllLayersOffExceptCurrent,
+    thawAllLayers,
+    getLayouts,
+    setLayout,
+    pickEntity,
+    screenToWorld,
+    worldToScreen,
+  }
 }
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function nextTick(): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, 0))

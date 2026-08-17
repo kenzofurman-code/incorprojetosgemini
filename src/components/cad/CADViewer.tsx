@@ -7,30 +7,7 @@
  *  - Gerenciar o ciclo de vida do viewer (init / dispose) via useEffect
  *  - Expor via ref imperativa (useImperativeHandle) os métodos do core
  *  - Tratar o FileReader para converter File → ArrayBuffer e passar ao core
- *  - Não possuir nem redefinir nenhum layout ou estilo do projeto pai
- *
- * O componente pai é responsável por definir o tamanho do container
- * (width/height, flex, etc.). Este componente preenche 100% do espaço
- * que receber.
- *
- * Uso:
- * ```tsx
- * const ref = useRef<CADViewerHandle>(null)
- *
- * <CADViewer
- *   ref={ref}
- *   onFileLoaded={(name) => console.log('carregou', name)}
- *   onCanvasClick={({ screenX, screenY, worldX, worldY }) => {
- *     // screenX/Y: pixel no canvas; worldX/Y: coordenada do modelo CAD
- *   }}
- * />
- *
- * // Controles externos (botões da toolbar do projeto pai):
- * ref.current?.setPan()
- * ref.current?.setZoom()
- * ref.current?.zoomToFit()
- * ref.current?.loadFile(file)   // File do input ou drag-and-drop
- * ```
+ *  - Expor APIs de Camadas, Layouts, Picking e Medição para o CADPage
  * ─────────────────────────────────────────────────────────────────────────
  */
 
@@ -47,48 +24,49 @@ import {
   type CADViewerInstance,
   type CADCanvasClickEvent,
 } from './cadViewerCore'
+import type { AcApLayerSummary } from '@mlightcad/cad-simple-viewer'
+import type { SelectedCADEntity } from './CADEntityDrawer'
+import type { CADLayoutItem } from './CADLayoutsBar'
 
 // ─── Public handle (exposto via ref ao componente pai) ───────────────────────
 
 export interface CADViewerHandle {
-  /** Carrega um File DWG ou DXF via FileReader → ArrayBuffer */
   loadFile: (file: File) => Promise<boolean>
   setPan: () => void
   setZoom: () => void
   zoomToFit: () => void
   zoomIn: () => void
   zoomOut: () => void
-  /** Acesso direto ao AcApDocManager para uso avançado */
   getManager: () => CADViewerInstance['manager'] | null
+  getInstance: () => CADViewerInstance | null
+
+  // Camadas
+  getLayerSummaries: () => AcApLayerSummary[]
+  setLayerOn: (layerName: string, isOn: boolean) => void
+  setLayerFrozen: (layerName: string, isFrozen: boolean) => void
+  setLayerLocked: (layerName: string, isLocked: boolean) => void
+  isolateLayer: (layerName: string) => void
+  turnAllLayersOn: () => void
+  turnAllLayersOffExceptCurrent: () => void
+  thawAllLayers: () => void
+
+  // Layouts
+  getLayouts: () => CADLayoutItem[]
+  setLayout: (layoutName: string) => void
+
+  // Inspeção e Medição
+  pickEntity: (screenX: number, screenY: number) => SelectedCADEntity | null
+  screenToWorld: (screenX: number, screenY: number) => { x: number; y: number }
+  worldToScreen: (worldX: number, worldY: number) => { x: number; y: number }
 }
 
 // ─── Props ───────────────────────────────────────────────────────────────────
 
 export interface CADViewerProps {
-  /**
-   * Chamado quando um arquivo termina de carregar com sucesso.
-   * Recebe o nome do arquivo.
-   */
   onFileLoaded?: (fileName: string) => void
-  /**
-   * Chamado quando o usuário clica no canvas.
-   * Recebe coordenadas de tela (pixels) e do modelo CAD.
-   */
   onCanvasClick?: (event: CADCanvasClickEvent) => void
-  /**
-   * Chamado quando o carregamento de arquivo falha.
-   */
   onLoadError?: (error: Error, fileName: string) => void
-  /**
-   * Cor de fundo do canvas em hexadecimal numérico.
-   * @default 0x1C2B3A
-   */
   background?: number
-  /**
-   * className aplicado ao div container do canvas.
-   * Use isso para posicionar/dimensionar o viewer.
-   * @default 'w-full h-full'
-   */
   containerClassName?: string
 }
 
@@ -123,7 +101,6 @@ const CADViewer = forwardRef<CADViewerHandle, CADViewerProps>(function CADViewer
         }
         viewerRef.current = viewer
 
-        // Conecta o handler de clique ao callback prop
         if (onCanvasClick) {
           unsubscribeClick = viewer.onClick(onCanvasClick)
         }
@@ -142,11 +119,7 @@ const CADViewer = forwardRef<CADViewerHandle, CADViewerProps>(function CADViewer
       viewerRef.current = null
     }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
-  // ^ background e onCanvasClick intencionalmente não são deps:
-  //   o viewer é inicializado uma vez; mudanças de prop não recriam o canvas.
-  //   Para onCanvasClick, usamos a versão mais recente via closure abaixo.
 
-  // Mantém o handler de clique atualizado sem reinicializar o viewer
   useEffect(() => {
     const viewer = viewerRef.current
     if (!viewer) return
@@ -154,7 +127,7 @@ const CADViewer = forwardRef<CADViewerHandle, CADViewerProps>(function CADViewer
     return unsub
   }, [onCanvasClick])
 
-  // ── loadFile: FileReader → ArrayBuffer → cadViewerCore.loadFile ──────────
+  // ── loadFile ──────────────────────────────────────────────────────────────
   const loadFile = useCallback(async (file: File): Promise<boolean> => {
     const viewer = viewerRef.current
     if (!viewer) {
@@ -197,12 +170,11 @@ const CADViewer = forwardRef<CADViewerHandle, CADViewerProps>(function CADViewer
         resolve(false)
       }
 
-      // Lê o arquivo como ArrayBuffer — formato que o cad-simple-viewer espera
       reader.readAsArrayBuffer(file)
     })
   }, [onFileLoaded, onLoadError])
 
-  // ── Imperativo handle exposto via ref ao pai ──────────────────────────────
+  // ── Imperative Handle ─────────────────────────────────────────────────────
   useImperativeHandle(ref, () => ({
     loadFile,
     setPan:     () => viewerRef.current?.setPan(),
@@ -211,13 +183,31 @@ const CADViewer = forwardRef<CADViewerHandle, CADViewerProps>(function CADViewer
     zoomIn:     () => viewerRef.current?.zoomIn(),
     zoomOut:    () => viewerRef.current?.zoomOut(),
     getManager: () => viewerRef.current?.manager ?? null,
+    getInstance: () => viewerRef.current ?? null,
+
+    // Camadas
+    getLayerSummaries: () => viewerRef.current?.getLayerSummaries() ?? [],
+    setLayerOn: (name, on) => viewerRef.current?.setLayerOn(name, on),
+    setLayerFrozen: (name, frz) => viewerRef.current?.setLayerFrozen(name, frz),
+    setLayerLocked: (name, lck) => viewerRef.current?.setLayerLocked(name, lck),
+    isolateLayer: (name) => viewerRef.current?.isolateLayer(name),
+    turnAllLayersOn: () => viewerRef.current?.turnAllLayersOn(),
+    turnAllLayersOffExceptCurrent: () => viewerRef.current?.turnAllLayersOffExceptCurrent(),
+    thawAllLayers: () => viewerRef.current?.thawAllLayers(),
+
+    // Layouts
+    getLayouts: () => viewerRef.current?.getLayouts() ?? [{ name: 'Model', isModel: true }],
+    setLayout: (name) => viewerRef.current?.setLayout(name),
+
+    // Inspeção e Medição
+    pickEntity: (sx, sy) => viewerRef.current?.pickEntity(sx, sy) ?? null,
+    screenToWorld: (sx, sy) => viewerRef.current?.screenToWorld(sx, sy) ?? { x: sx, y: sy },
+    worldToScreen: (wx, wy) => viewerRef.current?.worldToScreen(wx, wy) ?? { x: wx, y: wy },
   }), [loadFile])
 
-  // ── Render ────────────────────────────────────────────────────────────────
   return (
     <div ref={containerRef} className={containerClassName} style={{ position: 'relative' }}>
       {initError && (
-        // Slot de erro minimalista — o pai pode sobrescrever via CSS se quiser
         <div
           style={{
             position: 'absolute',
