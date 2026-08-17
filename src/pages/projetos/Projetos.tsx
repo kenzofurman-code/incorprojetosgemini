@@ -2,13 +2,16 @@ import { useState, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Upload, Search, Eye, GitCompare, Layers,
-  FileCheck, ChevronDown, ChevronRight, QrCode, History, Loader2, AlertCircle, Ruler
+  FileCheck, ChevronDown, ChevronRight, QrCode, History, Loader2, AlertCircle, Ruler,
+  FileArchive, FileText, CheckCircle2, Trash2, Plus, RefreshCw, Check, AlertTriangle, Sparkles
 } from 'lucide-react'
 import { Card, PageHeader, StatusBadge, Button, DataSourceBadge, QrCodePlacer } from '../../components/ui'
 
 import { useDrawings } from '../../hooks/useDrawings'
 import { useApp } from '../../context/AppContext'
 import type { Drawing, ProjectPhase } from '../../types'
+import { parseFilenameSmart } from '../../lib/filenameParser'
+import { extractPdfsFromZip, isZipFile } from '../../lib/zipExtractor'
 
 function VersionPill({ revision, active }: { revision: string; active?: boolean }) {
   return (
@@ -204,6 +207,32 @@ const PHASE_OPTIONS: { value: ProjectPhase; label: string }[] = [
   { value: 'as_built', label: 'As Built' },
 ]
 
+interface BatchItem {
+  id: string
+  file: File
+  originalName: string
+  disciplineCode: string
+  floorCode: string
+  docType: string
+  number: string
+  revision: string
+  phase: ProjectPhase
+  title: string
+  generatedCode: string
+  isComplete: boolean
+  confidence: {
+    discipline: boolean
+    floor: boolean
+    docType: boolean
+    revision: boolean
+    phase: boolean
+    number: boolean
+    title: boolean
+  }
+  status: 'pending' | 'uploading' | 'success' | 'error'
+  errorMessage?: string
+}
+
 function UploadPanel({ projectId, onClose, onUploaded }: {
   projectId: string
   onClose: () => void
@@ -221,337 +250,645 @@ function UploadPanel({ projectId, onClose, onUploaded }: {
     namingSeparator
   } = useApp()
 
-  const [file, setFile] = useState<File | null>(null)
-  const [disciplineCode, setDisciplineCode] = useState('')
-  const [floorCode, setFloorCode] = useState('')
-  const [docType, setDocType] = useState('PLA')
-  const [number, setNumber] = useState('001')
-  const [revision, setRevision] = useState('R00')
-  const [phase, setPhase] = useState<ProjectPhase>('executivo')
-  const [title, setTitle] = useState('')
+  const [items, setItems] = useState<BatchItem[]>([])
+  const [isProcessingZip, setIsProcessingZip] = useState(false)
   const [submitting, setSubmitting] = useState(false)
+  const [uploadProgress, setUploadProgress] = useState<{ current: number; total: number } | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [success, setSuccess] = useState(false)
+  const [successMsg, setSuccessMsg] = useState<string | null>(null)
   const [uploadedDrawing, setUploadedDrawing] = useState<Drawing | null>(null)
-  const [autoFilled, setAutoFilled] = useState(false)
 
-  // Generate code dynamically based on namingSequence and namingSeparator
-  const generatedCode = useMemo(() => {
+  // Batch action bulk values
+  const [bulkDisc, setBulkDisc] = useState('')
+  const [bulkFloor, setBulkFloor] = useState('')
+  const [bulkPhase, setBulkPhase] = useState<ProjectPhase | ''>('')
+
+  // Compute code for a single item
+  const computeCode = (item: {
+    disciplineCode: string
+    floorCode: string
+    docType: string
+    number: string
+    revision: string
+    phase: ProjectPhase
+  }) => {
+    const phaseCodeMap: Record<ProjectPhase, string> = {
+      estudo_preliminar: 'EP',
+      anteprojeto: 'AP',
+      projeto_legal: 'PL',
+      projeto_basico: 'PB',
+      pre_executivo: 'PE',
+      executivo: 'EX',
+      liberado_para_obra: 'LO',
+      as_built: 'ASB',
+    }
     const values: Record<string, string> = {
       PROJETO: currentProject.code,
-      FASE: phase === 'estudo_preliminar' ? 'EP'
-            : phase === 'anteprojeto' ? 'AP'
-            : phase === 'projeto_legal' ? 'PL'
-            : phase === 'projeto_basico' ? 'PB'
-            : phase === 'pre_executivo' ? 'PE'
-            : phase === 'executivo' ? 'EX'
-            : phase === 'liberado_para_obra' ? 'LO'
-            : 'ASB',
-      DISCIPLINA: disciplineCode,
-      PAVIMENTO: floorCode,
-      TIPO: docType,
-      NUMERO: number,
-      REVISAO: revision
+      FASE: phaseCodeMap[item.phase] || 'EX',
+      DISCIPLINA: item.disciplineCode,
+      PAVIMENTO: item.floorCode,
+      TIPO: item.docType,
+      NUMERO: item.number,
+      REVISAO: item.revision,
     }
-    if (!disciplineCode || !floorCode) return ''
+    if (!item.disciplineCode || !item.floorCode) return ''
     return namingSequence
       .map(key => values[key] || '')
       .filter(Boolean)
       .join(namingSeparator)
-  }, [namingSequence, namingSeparator, currentProject.code, phase, disciplineCode, floorCode, docType, number, revision])
-
-  const handleFileChange = (selectedFile: File | null) => {
-    setFile(selectedFile)
-    setAutoFilled(false)
-    if (!selectedFile) return
-
-    const nameWithoutExt = selectedFile.name.replace(/\.[^/.]+$/, "")
-    const delimiters = new RegExp(`[${namingSeparator}_\\s-]+`)
-    const tokens = nameWithoutExt.split(delimiters).map(t => t.trim().toUpperCase())
-
-    let filledDisc = ''
-    let filledFloor = ''
-    let filledType = docTypes[0] || 'PLA'
-    let filledRev = 'R00'
-    let filledPhase: ProjectPhase = 'executivo'
-    let filledNumber = '001'
-    let filledTitle = ''
-
-    // 1. Positional matching based on namingSequence
-    namingSequence.forEach((key, idx) => {
-      const token = tokens[idx]
-      if (!token) return
-
-      if (key === 'DISCIPLINA') {
-        const found = disciplines.find(d => d.code.toUpperCase() === token)
-        if (found) filledDisc = found.code
-      } else if (key === 'PAVIMENTO') {
-        const found = floors.find(f => f.code.toUpperCase() === token)
-        if (found) filledFloor = found.code
-        else if (/^(P\d+|SS\d+|TER|COB|MEZ|TIP|ULT|DUP)$/i.test(token)) filledFloor = token
-      } else if (key === 'TIPO') {
-        const found = docTypes.find(t => t.toUpperCase() === token)
-        if (found) filledType = found
-      } else if (key === 'REVISAO') {
-        const match = token.match(/^R(EV)?(\d+)$/i)
-        if (match) {
-          const num = match[2].padStart(2, '0')
-          filledRev = `R${num}`
-        }
-      } else if (key === 'FASE') {
-        if (token === 'EP' || token === 'AP' || token === 'ANTE') filledPhase = 'anteprojeto'
-        else if (token === 'PB' || token === 'BAS') filledPhase = 'projeto_basico'
-        else if (token === 'PE' || token === 'PRE') filledPhase = 'pre_executivo'
-        else if (token === 'EX' || token === 'EXE' || token === 'EXEC' || token === 'EXECUTIVO') filledPhase = 'executivo'
-        else if (token === 'ASB' || token === 'ASBUILT') filledPhase = 'as_built'
-      } else if (key === 'NUMERO') {
-        if (/^\d{3}$/.test(token)) filledNumber = token
-      }
-    })
-
-    // 2. Fallback heuristic: search all tokens
-    tokens.forEach(token => {
-      if (!filledDisc) {
-        const found = disciplines.find(d => d.code.toUpperCase() === token)
-        if (found) filledDisc = found.code
-      }
-      if (!filledFloor) {
-        const found = floors.find(f => f.code.toUpperCase() === token)
-        if (found) filledFloor = found.code
-        else if (/^(P\d+|SS\d+|TER|COB|MEZ|TIP|ULT|DUP)$/i.test(token)) filledFloor = token
-      }
-      if (!filledType) {
-        const found = docTypes.find(t => t.toUpperCase() === token)
-        if (found) filledType = found
-      }
-      if (filledRev === 'R00') {
-        const match = token.match(/^R(EV)?(\d+)$/i)
-        if (match) {
-          const num = match[2].padStart(2, '0')
-          filledRev = `R${num}`
-        }
-      }
-      if (filledNumber === '001') {
-        if (/^\d{3}$/.test(token)) filledNumber = token
-      }
-    })
-
-    // 3. Clean title
-    const ignored = new Set([
-      filledDisc, filledFloor, filledType, filledRev, filledNumber,
-      'R00','R01','R02','R03','R04','R05',
-      'EP','AP','PB','PE','EX','EXE','ASB', currentProject.code.toUpperCase()
-    ])
-    const titleTokens = tokens.filter(t => !ignored.has(t) && !/^\d{2,4}$/.test(t))
-    if (titleTokens.length > 0) {
-      filledTitle = titleTokens.join(' ')
-        .toLowerCase()
-        .replace(/\b\w/g, c => c.toUpperCase())
-    } else {
-      filledTitle = nameWithoutExt.replace(/[-_]+/g, ' ').trim()
-    }
-
-    if (filledDisc) setDisciplineCode(filledDisc)
-    if (filledFloor) setFloorCode(filledFloor)
-    if (filledType) setDocType(filledType)
-    if (filledRev) setRevision(filledRev)
-    if (filledPhase) setPhase(filledPhase)
-    if (filledNumber) setNumber(filledNumber)
-    if (filledTitle) setTitle(filledTitle)
-
-    setAutoFilled(true)
   }
 
-  async function handleSubmit() {
-    if (!file || !disciplineCode || !floorCode || !title) {
-      setError('Preencha arquivo, disciplina, pavimento e título.')
+  // Process incoming files (PDFs and ZIP archives)
+  const handleFilesSelected = async (fileList: FileList | File[] | null) => {
+    if (!fileList || fileList.length === 0) return
+    setError(null)
+    setSuccessMsg(null)
+
+    const rawFiles = Array.from(fileList)
+    const pdfFiles: File[] = []
+
+    try {
+      const hasZip = rawFiles.some(f => isZipFile(f))
+      if (hasZip) {
+        setIsProcessingZip(true)
+      }
+
+      for (const file of rawFiles) {
+        if (isZipFile(file)) {
+          const extracted = await extractPdfsFromZip(file)
+          pdfFiles.push(...extracted)
+        } else if (file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')) {
+          pdfFiles.push(file)
+        }
+      }
+
+      if (pdfFiles.length === 0) {
+        setError('Nenhum arquivo PDF válido encontrado na seleção ou no arquivo ZIP.')
+        setIsProcessingZip(false)
+        return
+      }
+
+      const newBatchItems: BatchItem[] = pdfFiles.map((file, idx) => {
+        const parsed = parseFilenameSmart(file.name, {
+          disciplines,
+          floors,
+          phases,
+          docTypes,
+          namingSequence,
+          namingSeparator,
+          projectCode: currentProject.code,
+        })
+
+        const disc = parsed.disciplineCode || (disciplines[0]?.code || 'ARQ')
+        const floor = parsed.floorCode || (floors[0]?.code || 'TER')
+        const type = parsed.docType || (docTypes[0] || 'PLA')
+        const num = parsed.number || String(idx + 1).padStart(3, '0')
+        const rev = parsed.revision || 'R00'
+        const phaseVal = parsed.phase || 'executivo'
+        const titleVal = parsed.title || file.name.replace(/\.[^/.]+$/, '')
+
+        const code = computeCode({
+          disciplineCode: disc,
+          floorCode: floor,
+          docType: type,
+          number: num,
+          revision: rev,
+          phase: phaseVal,
+        })
+
+        return {
+          id: `item-${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 6)}`,
+          file,
+          originalName: file.name,
+          disciplineCode: disc,
+          floorCode: floor,
+          docType: type,
+          number: num,
+          revision: rev,
+          phase: phaseVal,
+          title: titleVal,
+          generatedCode: code,
+          isComplete: Boolean(disc && floor && titleVal),
+          confidence: parsed.confidence,
+          status: 'pending',
+        }
+      })
+
+      setItems(prev => [...prev, ...newBatchItems])
+    } catch (err) {
+      console.error('[UploadPanel] Erro ao processar arquivos:', err)
+      setError(err instanceof Error ? err.message : 'Erro ao processar arquivos selecionados.')
+    } finally {
+      setIsProcessingZip(false)
+    }
+  }
+
+  // Update specific item in batch
+  const updateItem = (id: string, updates: Partial<BatchItem>) => {
+    setItems(prev => prev.map(item => {
+      if (item.id !== id) return item
+      const updated = { ...item, ...updates }
+      const newCode = computeCode({
+        disciplineCode: updated.disciplineCode,
+        floorCode: updated.floorCode,
+        docType: updated.docType,
+        number: updated.number,
+        revision: updated.revision,
+        phase: updated.phase,
+      })
+      return {
+        ...updated,
+        generatedCode: newCode,
+        isComplete: Boolean(updated.disciplineCode && updated.floorCode && updated.title),
+      }
+    }))
+  }
+
+  // Remove item from batch
+  const removeItem = (id: string) => {
+    setItems(prev => prev.filter(i => i.id !== id))
+  }
+
+  // Bulk apply
+  const applyBulkDiscipline = () => {
+    if (!bulkDisc) return
+    setItems(prev => prev.map(i => {
+      const updated = { ...i, disciplineCode: bulkDisc }
+      return {
+        ...updated,
+        generatedCode: computeCode(updated),
+        isComplete: Boolean(updated.disciplineCode && updated.floorCode && updated.title),
+      }
+    }))
+  }
+
+  const applyBulkFloor = () => {
+    if (!bulkFloor) return
+    setItems(prev => prev.map(i => {
+      const updated = { ...i, floorCode: bulkFloor }
+      return {
+        ...updated,
+        generatedCode: computeCode(updated),
+        isComplete: Boolean(updated.disciplineCode && updated.floorCode && updated.title),
+      }
+    }))
+  }
+
+  const applyBulkPhase = () => {
+    if (!bulkPhase) return
+    setItems(prev => prev.map(i => {
+      const updated = { ...i, phase: bulkPhase }
+      return {
+        ...updated,
+        generatedCode: computeCode(updated),
+        isComplete: Boolean(updated.disciplineCode && updated.floorCode && updated.title),
+      }
+    }))
+  }
+
+  // Submit all items
+  const handleSubmitAll = async () => {
+    if (items.length === 0) return
+    const incomplete = items.some(i => !i.disciplineCode || !i.floorCode || !i.title)
+    if (incomplete) {
+      setError('Algumas pranchas estão com dados incompletos. Preencha disciplina, pavimento e título antes de enviar.')
       return
     }
+
     setSubmitting(true)
     setError(null)
-    try {
-      const newDrawing = await upload({
-        projectId,
-        file,
-        code: generatedCode,
-        disciplineCode,
-        floorCode,
-        docType,
-        number,
-        revision,
-        phase,
-        title,
-        designerName: currentUser.name,
-        designerId: currentUser.id,
-      })
-      setUploadedDrawing(newDrawing)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Erro ao enviar prancha.')
-      setSubmitting(false)
+    setSuccessMsg(null)
+
+    let successCount = 0
+    let lastUploaded: Drawing | null = null
+
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i]
+      if (item.status === 'success') {
+        successCount++
+        continue
+      }
+
+      setUploadProgress({ current: i + 1, total: items.length })
+      updateItem(item.id, { status: 'uploading' })
+
+      try {
+        const newDrawing = await upload({
+          projectId,
+          file: item.file,
+          code: item.generatedCode,
+          disciplineCode: item.disciplineCode,
+          floorCode: item.floorCode,
+          docType: item.docType,
+          number: item.number,
+          revision: item.revision,
+          phase: item.phase,
+          title: item.title,
+          designerName: currentUser.name,
+          designerId: currentUser.id,
+        })
+        lastUploaded = newDrawing
+        successCount++
+        updateItem(item.id, { status: 'success' })
+      } catch (err) {
+        console.error(`[UploadPanel] Erro ao enviar prancha ${item.originalName}:`, err)
+        updateItem(item.id, {
+          status: 'error',
+          errorMessage: err instanceof Error ? err.message : 'Falha no envio'
+        })
+      }
+    }
+
+    setSubmitting(false)
+    setUploadProgress(null)
+
+    if (successCount === items.length) {
+      setSuccessMsg(`✓ Todas as ${successCount} pranchas foram enviadas com sucesso!`)
+      if (items.length === 1 && lastUploaded) {
+        setUploadedDrawing(lastUploaded)
+      } else {
+        setTimeout(() => {
+          onUploaded()
+          onClose()
+        }, 1500)
+      }
+    } else {
+      setError(`${successCount} de ${items.length} pranchas enviadas. Algumas apresentaram erro.`)
+      onUploaded()
     }
   }
 
-  function handleQrSaved() {
-    setSuccess(true)
-    setTimeout(() => {
-      onUploaded()
-      onClose()
-    }, 1000)
-  }
-
-  function handleQrClose() {
-    onUploaded()
-    onClose()
-  }
+  const readyCount = items.filter(i => i.isComplete).length
+  const attentionCount = items.length - readyCount
 
   return (
     <>
-      <Card className="p-5">
-      <div className="text-sm font-semibold mb-4" style={{ color: 'var(--white)' }}>
-        Upload de Prancha
-      </div>
+      <Card className="p-5 space-y-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Sparkles size={18} className="text-orange-400" />
+            <span className="text-sm font-semibold text-white">
+              Importação de Pranchas (PDFs & ZIP)
+            </span>
+          </div>
+          {items.length > 0 && (
+            <button
+              onClick={() => setItems([])}
+              disabled={submitting}
+              className="text-xs text-slate-400 hover:text-red-400 flex items-center gap-1 transition-colors"
+            >
+              <Trash2 size={12} />
+              Limpar fila
+            </button>
+          )}
+        </div>
 
-      {error && (
-        <div className="flex items-start gap-2 text-xs p-3 rounded-lg mb-4"
-          style={{ background: 'rgba(239,68,68,0.1)', color: '#EF4444', border: '1px solid rgba(239,68,68,0.25)' }}>
-          <AlertCircle size={14} className="flex-shrink-0 mt-0.5" />
-          <span>{error}</span>
-        </div>
-      )}
-      {success && (
-        <div className="text-xs p-3 rounded-lg mb-4"
-          style={{ background: 'rgba(34,197,94,0.1)', color: '#22C55E', border: '1px solid rgba(34,197,94,0.25)' }}>
-          ✓ Prancha enviada com sucesso!
-        </div>
-      )}
-      {autoFilled && (
-        <div className="text-xs p-3 rounded-lg mb-4"
-          style={{ background: 'rgba(59,130,246,0.1)', color: '#3B82F6', border: '1px solid rgba(59,130,246,0.25)' }}>
-          ✓ Campos identificados automaticamente a partir do nome do arquivo!
-        </div>
-      )}
+        {error && (
+          <div className="flex items-start gap-2 text-xs p-3 rounded-lg"
+            style={{ background: 'rgba(239,68,68,0.1)', color: '#EF4444', border: '1px solid rgba(239,68,68,0.25)' }}>
+            <AlertCircle size={14} className="flex-shrink-0 mt-0.5" />
+            <span>{error}</span>
+          </div>
+        )}
 
-      <label
-        className="block border-2 border-dashed rounded-xl p-8 text-center cursor-pointer hover:border-orange-400/50 transition-colors"
-        style={{ borderColor: file ? 'var(--orange)' : 'var(--surface-border)' }}
-      >
-        <input
-          type="file"
-          accept="application/pdf"
-          className="hidden"
-          onChange={e => handleFileChange(e.target.files?.[0] || null)}
+        {successMsg && (
+          <div className="text-xs p-3 rounded-lg"
+            style={{ background: 'rgba(34,197,94,0.1)', color: '#22C55E', border: '1px solid rgba(34,197,94,0.25)' }}>
+            {successMsg}
+          </div>
+        )}
+
+        {/* Drag & Drop Area */}
+        <label
+          className="block border-2 border-dashed rounded-xl p-6 text-center cursor-pointer hover:border-orange-400/50 transition-colors"
+          style={{
+            borderColor: items.length > 0 ? 'var(--orange)' : 'var(--surface-border)',
+            background: 'var(--surface-mid)'
+          }}
+        >
+          <input
+            type="file"
+            multiple
+            accept=".pdf,.zip,application/pdf,application/zip,application/x-zip-compressed"
+            className="hidden"
+            disabled={submitting || isProcessingZip}
+            onChange={e => handleFilesSelected(e.target.files)}
+          />
+          {isProcessingZip ? (
+            <div className="py-2">
+              <Loader2 size={28} className="mx-auto mb-2 text-orange-400 animate-spin" />
+              <div className="text-sm font-medium text-white">Descompactando arquivo ZIP e analisando PDFs...</div>
+              <div className="text-xs text-slate-400 mt-1">Extraindo pranchas e aplicando motor de reconhecimento</div>
+            </div>
+          ) : (
+            <>
+              <div className="flex justify-center items-center gap-3 mb-2 text-orange-400">
+                <FileText size={24} />
+                <Plus size={14} className="text-slate-500" />
+                <FileArchive size={24} />
+              </div>
+              <div className="text-sm font-medium text-white mb-1">
+                {items.length > 0
+                  ? 'Arraste mais PDFs ou outro arquivo .ZIP para adicionar à fila'
+                  : 'Arraste PDFs ou um arquivo .ZIP aqui (ou clique para selecionar múltiplos)'}
+              </div>
+              <div className="text-xs text-slate-400">
+                O motor inteligente identificará automaticamente Disciplina, Pavimento, Fase, Tipo, Revisão e Título
+              </div>
+            </>
+          )}
+        </label>
+
+        {/* Staging / Review Area */}
+        {items.length > 0 && (
+          <div className="space-y-3">
+            {/* Batch summary & quick actions bar */}
+            <div className="flex flex-wrap items-center justify-between gap-3 p-3 bg-slate-900/60 rounded-xl border border-slate-800 text-xs">
+              <div className="flex items-center gap-2">
+                <span className="font-semibold text-white px-2 py-0.5 rounded bg-slate-800 border border-slate-700">
+                  {items.length} {items.length === 1 ? 'prancha' : 'pranchas'}
+                </span>
+                <span className="text-emerald-400 flex items-center gap-1">
+                  <CheckCircle2 size={13} /> {readyCount} prontos
+                </span>
+                {attentionCount > 0 && (
+                  <span className="text-amber-400 flex items-center gap-1">
+                    <AlertTriangle size={13} /> {attentionCount} requer atenção
+                  </span>
+                )}
+              </div>
+
+              {/* Bulk actions */}
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-slate-400 font-medium">Aplicar a todos:</span>
+                
+                {/* Bulk Disc */}
+                <div className="flex items-center gap-1">
+                  <select
+                    value={bulkDisc}
+                    onChange={e => setBulkDisc(e.target.value)}
+                    className="text-xs rounded px-2 py-1 outline-none bg-slate-800 border border-slate-700 text-white"
+                  >
+                    <option value="">Disciplina...</option>
+                    {disciplines.map(d => <option key={d.code} value={d.code}>{d.code}</option>)}
+                  </select>
+                  <button
+                    onClick={applyBulkDiscipline}
+                    disabled={!bulkDisc}
+                    className="p-1 hover:bg-slate-700 disabled:opacity-30 rounded text-slate-300"
+                    title="Aplicar disciplina a todos"
+                  >
+                    <Check size={12} />
+                  </button>
+                </div>
+
+                {/* Bulk Floor */}
+                <div className="flex items-center gap-1">
+                  <select
+                    value={bulkFloor}
+                    onChange={e => setBulkFloor(e.target.value)}
+                    className="text-xs rounded px-2 py-1 outline-none bg-slate-800 border border-slate-700 text-white"
+                  >
+                    <option value="">Pavimento...</option>
+                    {floors.map(f => <option key={f.code} value={f.code}>{f.code}</option>)}
+                  </select>
+                  <button
+                    onClick={applyBulkFloor}
+                    disabled={!bulkFloor}
+                    className="p-1 hover:bg-slate-700 disabled:opacity-30 rounded text-slate-300"
+                    title="Aplicar pavimento a todos"
+                  >
+                    <Check size={12} />
+                  </button>
+                </div>
+
+                {/* Bulk Phase */}
+                <div className="flex items-center gap-1">
+                  <select
+                    value={bulkPhase}
+                    onChange={e => setBulkPhase(e.target.value as ProjectPhase)}
+                    className="text-xs rounded px-2 py-1 outline-none bg-slate-800 border border-slate-700 text-white"
+                  >
+                    <option value="">Fase...</option>
+                    {phases.map(p => <option key={p.value} value={p.value}>{p.label}</option>)}
+                  </select>
+                  <button
+                    onClick={applyBulkPhase}
+                    disabled={!bulkPhase}
+                    className="p-1 hover:bg-slate-700 disabled:opacity-30 rounded text-slate-300"
+                    title="Aplicar fase a todos"
+                  >
+                    <Check size={12} />
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Staging Table */}
+            <div className="overflow-x-auto rounded-xl border border-slate-800 max-h-[360px] overflow-y-auto">
+              <table className="w-full text-left text-xs border-collapse">
+                <thead className="sticky top-0 bg-slate-900 border-b border-slate-800 z-10">
+                  <tr className="text-slate-400">
+                    <th className="px-3 py-2 w-8">Status</th>
+                    <th className="px-3 py-2 min-w-[140px]">Arquivo</th>
+                    <th className="px-3 py-2 w-28">Disciplina</th>
+                    <th className="px-3 py-2 w-28">Pavimento</th>
+                    <th className="px-3 py-2 w-20">Tipo</th>
+                    <th className="px-3 py-2 w-16">Nº</th>
+                    <th className="px-3 py-2 w-20">Rev</th>
+                    <th className="px-3 py-2 w-28">Fase</th>
+                    <th className="px-3 py-2 min-w-[180px]">Título</th>
+                    <th className="px-3 py-2 min-w-[160px]">Código Gerado</th>
+                    <th className="px-3 py-2 w-10 text-right">Ação</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800 bg-slate-950/40">
+                  {items.map(item => (
+                    <tr
+                      key={item.id}
+                      className="hover:bg-white/5 transition-colors"
+                      style={{
+                        background: item.status === 'error' ? 'rgba(239,68,68,0.05)'
+                          : item.status === 'success' ? 'rgba(34,197,94,0.05)'
+                          : undefined
+                      }}
+                    >
+                      {/* Status */}
+                      <td className="px-3 py-2">
+                        {item.status === 'uploading' ? (
+                          <Loader2 size={14} className="animate-spin text-orange-400" />
+                        ) : item.status === 'success' ? (
+                          <CheckCircle2 size={14} className="text-emerald-400" />
+                        ) : item.status === 'error' ? (
+                          <span title={item.errorMessage}>
+                            <AlertCircle size={14} className="text-red-400" />
+                          </span>
+                        ) : item.isComplete ? (
+                          <span className="w-2 h-2 rounded-full bg-emerald-400 inline-block" title="Pronto para envio" />
+                        ) : (
+                          <span className="w-2 h-2 rounded-full bg-amber-400 inline-block" title="Verifique os campos" />
+                        )}
+                      </td>
+
+                      {/* Filename */}
+                      <td className="px-3 py-2 font-mono text-[11px] text-slate-300 truncate max-w-[160px]" title={item.originalName}>
+                        {item.originalName}
+                      </td>
+
+                      {/* Disciplina */}
+                      <td className="px-3 py-2">
+                        <select
+                          value={item.disciplineCode}
+                          disabled={submitting || item.status === 'success'}
+                          onChange={e => updateItem(item.id, { disciplineCode: e.target.value })}
+                          className="w-full text-xs rounded px-1.5 py-1 outline-none bg-slate-800 border border-slate-700 text-white"
+                        >
+                          {disciplines.map(d => <option key={d.code} value={d.code}>{d.code} – {d.name}</option>)}
+                        </select>
+                      </td>
+
+                      {/* Pavimento */}
+                      <td className="px-3 py-2">
+                        <select
+                          value={item.floorCode}
+                          disabled={submitting || item.status === 'success'}
+                          onChange={e => updateItem(item.id, { floorCode: e.target.value })}
+                          className="w-full text-xs rounded px-1.5 py-1 outline-none bg-slate-800 border border-slate-700 text-white"
+                        >
+                          {floors.map(f => <option key={f.code} value={f.code}>{f.code} – {f.name}</option>)}
+                        </select>
+                      </td>
+
+                      {/* Tipo */}
+                      <td className="px-3 py-2">
+                        <select
+                          value={item.docType}
+                          disabled={submitting || item.status === 'success'}
+                          onChange={e => updateItem(item.id, { docType: e.target.value })}
+                          className="w-full text-xs rounded px-1.5 py-1 outline-none bg-slate-800 border border-slate-700 text-white font-mono"
+                        >
+                          {docTypes.map(t => <option key={t} value={t}>{t}</option>)}
+                        </select>
+                      </td>
+
+                      {/* Número */}
+                      <td className="px-3 py-2">
+                        <input
+                          type="text"
+                          value={item.number}
+                          disabled={submitting || item.status === 'success'}
+                          onChange={e => updateItem(item.id, { number: e.target.value })}
+                          className="w-full text-xs rounded px-1.5 py-1 outline-none bg-slate-800 border border-slate-700 text-white font-mono text-center"
+                        />
+                      </td>
+
+                      {/* Revisão */}
+                      <td className="px-3 py-2">
+                        <select
+                          value={item.revision}
+                          disabled={submitting || item.status === 'success'}
+                          onChange={e => updateItem(item.id, { revision: e.target.value })}
+                          className="w-full text-xs rounded px-1.5 py-1 outline-none bg-slate-800 border border-slate-700 text-white font-mono"
+                        >
+                          {['R00','R01','R02','R03','R04','R05','R06','R07'].map(r => <option key={r} value={r}>{r}</option>)}
+                        </select>
+                      </td>
+
+                      {/* Fase */}
+                      <td className="px-3 py-2">
+                        <select
+                          value={item.phase}
+                          disabled={submitting || item.status === 'success'}
+                          onChange={e => updateItem(item.id, { phase: e.target.value as ProjectPhase })}
+                          className="w-full text-xs rounded px-1.5 py-1 outline-none bg-slate-800 border border-slate-700 text-white"
+                        >
+                          {phases.map(p => <option key={p.value} value={p.value}>{p.label}</option>)}
+                        </select>
+                      </td>
+
+                      {/* Título */}
+                      <td className="px-3 py-2">
+                        <input
+                          type="text"
+                          value={item.title}
+                          disabled={submitting || item.status === 'success'}
+                          onChange={e => updateItem(item.id, { title: e.target.value })}
+                          className="w-full text-xs rounded px-2 py-1 outline-none bg-slate-800 border border-slate-700 text-white"
+                          placeholder="Título da prancha..."
+                        />
+                      </td>
+
+                      {/* Código Oficial */}
+                      <td className="px-3 py-2 font-mono text-[11px] text-orange-400 font-bold">
+                        {item.generatedCode || '—'}
+                      </td>
+
+                      {/* Ações */}
+                      <td className="px-3 py-2 text-right">
+                        <button
+                          onClick={() => removeItem(item.id)}
+                          disabled={submitting || item.status === 'success'}
+                          className="p-1 text-slate-500 hover:text-red-400 disabled:opacity-30 transition-colors"
+                          title="Remover da fila"
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* Upload Progress Bar */}
+        {uploadProgress && (
+          <div className="space-y-1.5 p-3 rounded-xl bg-slate-900 border border-slate-800">
+            <div className="flex justify-between text-xs text-slate-300 font-medium">
+              <span>Enviando prancha {uploadProgress.current} de {uploadProgress.total}...</span>
+              <span>{Math.round((uploadProgress.current / uploadProgress.total) * 100)}%</span>
+            </div>
+            <div className="w-full h-2 bg-slate-800 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-orange-500 transition-all duration-300"
+                style={{ width: `${(uploadProgress.current / uploadProgress.total) * 100}%` }}
+              />
+            </div>
+          </div>
+        )}
+
+        {/* Footer Actions */}
+        <div className="flex gap-2 pt-2 justify-end">
+          <Button variant="ghost" size="sm" onClick={onClose} disabled={submitting}>
+            Fechar
+          </Button>
+          <Button
+            size="sm"
+            onClick={handleSubmitAll}
+            disabled={submitting || items.length === 0 || isProcessingZip}
+          >
+            {submitting ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
+            {submitting
+              ? 'Enviando Pranchas...'
+              : `Importar ${items.length > 0 ? `${items.length} ${items.length === 1 ? 'Prancha' : 'Pranchas'}` : 'Pranchas'}`}
+          </Button>
+        </div>
+      </Card>
+
+      {uploadedDrawing && (
+        <QrCodePlacer
+          drawing={uploadedDrawing}
+          onSaved={() => {
+            onUploaded()
+            onClose()
+          }}
+          onClose={() => {
+            onUploaded()
+            onClose()
+          }}
         />
-        <Upload size={32} className="mx-auto mb-3" style={{ color: file ? 'var(--orange)' : 'var(--slate)' }} />
-        <div className="text-sm font-medium mb-1" style={{ color: 'var(--white)' }}>
-          {file ? file.name : 'Arraste um PDF aqui ou clique para selecionar'}
-        </div>
-        <div className="text-xs" style={{ color: 'var(--slate)' }}>
-          PDF · Máximo 100MB por arquivo
-        </div>
-      </label>
-
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mt-4">
-        <div>
-          <label className="text-xs mb-1.5 block" style={{ color: 'var(--slate)' }}>Disciplina *</label>
-          <select
-            value={disciplineCode}
-            onChange={e => setDisciplineCode(e.target.value)}
-            className="w-full text-sm rounded-lg px-3 py-2 outline-none"
-            style={{ background: 'var(--surface-mid)', border: '1px solid var(--surface-border)', color: 'var(--white)' }}
-          >
-            <option value="">Selecionar...</option>
-            {disciplines.map(d => <option key={d.code} value={d.code}>{d.code} – {d.name}</option>)}
-          </select>
-        </div>
-        <div>
-          <label className="text-xs mb-1.5 block" style={{ color: 'var(--slate)' }}>Pavimento *</label>
-          <select
-            value={floorCode}
-            onChange={e => setFloorCode(e.target.value)}
-            className="w-full text-sm rounded-lg px-3 py-2 outline-none"
-            style={{ background: 'var(--surface-mid)', border: '1px solid var(--surface-border)', color: 'var(--white)' }}
-          >
-            <option value="">Selecionar...</option>
-            {floors.map(f => <option key={f.code} value={f.code}>{f.code} – {f.name}</option>)}
-          </select>
-        </div>
-        <div>
-          <label className="text-xs mb-1.5 block" style={{ color: 'var(--slate)' }}>Fase</label>
-          <select
-            value={phase}
-            onChange={e => setPhase(e.target.value as ProjectPhase)}
-            className="w-full text-sm rounded-lg px-3 py-2 outline-none"
-            style={{ background: 'var(--surface-mid)', border: '1px solid var(--surface-border)', color: 'var(--white)' }}
-          >
-            {phases.map(p => <option key={p.value} value={p.value}>{p.label}</option>)}
-          </select>
-        </div>
-        <div>
-          <label className="text-xs mb-1.5 block" style={{ color: 'var(--slate)' }}>Revisão</label>
-          <select
-            value={revision}
-            onChange={e => setRevision(e.target.value)}
-            className="w-full text-sm rounded-lg px-3 py-2 outline-none"
-            style={{ background: 'var(--surface-mid)', border: '1px solid var(--surface-border)', color: 'var(--white)' }}
-          >
-            {['R00','R01','R02','R03','R04','R05'].map(r => <option key={r}>{r}</option>)}
-          </select>
-        </div>
-        <div>
-          <label className="text-xs mb-1.5 block" style={{ color: 'var(--slate)' }}>Tipo</label>
-          <select
-            value={docType}
-            onChange={e => setDocType(e.target.value)}
-            className="w-full text-sm rounded-lg px-3 py-2 outline-none"
-            style={{ background: 'var(--surface-mid)', border: '1px solid var(--surface-border)', color: 'var(--white)' }}
-          >
-            {docTypes.map(t => <option key={t} value={t}>{t}</option>)}
-          </select>
-        </div>
-        <div>
-          <label className="text-xs mb-1.5 block" style={{ color: 'var(--slate)' }}>Número</label>
-          <input
-            type="text"
-            value={number}
-            onChange={e => setNumber(e.target.value)}
-            className="w-full text-sm rounded-lg px-3 py-2 outline-none"
-            style={{ background: 'var(--surface-mid)', border: '1px solid var(--surface-border)', color: 'var(--white)' }}
-          />
-        </div>
-        <div className="col-span-2">
-          <label className="text-xs mb-1.5 block" style={{ color: 'var(--slate)' }}>Título *</label>
-          <input
-            type="text"
-            placeholder="Ex: Planta de Acabamentos - Apto 31"
-            value={title}
-            onChange={e => setTitle(e.target.value)}
-            className="w-full text-sm rounded-lg px-3 py-2 outline-none"
-            style={{ background: 'var(--surface-mid)', border: '1px solid var(--surface-border)', color: 'var(--white)' }}
-          />
-        </div>
-      </div>
-
-      {generatedCode && (
-        <div className="mt-3 text-xs font-mono px-3 py-2 rounded-lg" style={{ background: 'var(--surface-mid)', color: 'var(--orange)' }}>
-          Código gerado: {generatedCode}
-        </div>
       )}
-
-      <div className="flex gap-2 mt-4 justify-end">
-        <Button variant="ghost" size="sm" onClick={onClose} disabled={submitting}>Cancelar</Button>
-        <Button size="sm" onClick={handleSubmit} disabled={submitting}>
-          {submitting ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
-          {submitting ? 'Enviando...' : 'Enviar Prancha'}
-        </Button>
-      </div>
-    </Card>
-    {uploadedDrawing && (
-      <QrCodePlacer
-        drawing={uploadedDrawing}
-        onSaved={handleQrSaved}
-        onClose={handleQrClose}
-      />
-    )}
     </>
   )
 }
