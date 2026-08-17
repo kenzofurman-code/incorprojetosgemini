@@ -140,7 +140,41 @@ export default function BIMPropertiesDrawer({
     })
   }
 
-  if (selectedElements.length === 0) return null
+  if (selectedElements.length === 0) {
+    return (
+      <div
+        className="absolute top-3 right-3 bottom-3 w-80 lg:w-96 rounded-2xl z-30 flex flex-col shadow-2xl overflow-hidden border border-slate-700/60"
+        style={{
+          background: 'rgba(15, 25, 35, 0.95)',
+          backdropFilter: 'blur(12px)',
+        }}
+      >
+        <div className="flex items-center justify-between px-4 py-3 border-b border-slate-800 bg-slate-900/60">
+          <div className="flex items-center gap-2 min-w-0">
+            <FileSpreadsheet size={16} className="text-orange-400 flex-shrink-0" />
+            <span className="text-xs font-bold text-white">Extração & Quantitativos (QTO)</span>
+          </div>
+          <button
+            onClick={onClose}
+            className="p-1 rounded-lg hover:bg-white/10 text-slate-400 hover:text-white transition-colors"
+          >
+            <X size={16} />
+          </button>
+        </div>
+        <div className="flex-1 p-6 flex flex-col items-center justify-center text-center space-y-3">
+          <div className="w-12 h-12 rounded-2xl bg-orange-500/10 border border-orange-500/20 flex items-center justify-center text-orange-400">
+            <FileSpreadsheet size={24} />
+          </div>
+          <div className="text-sm font-bold text-white">Nenhum elemento selecionado</div>
+          <div className="text-xs text-slate-400 max-w-xs leading-relaxed">
+            Clique em qualquer peça 3D no modelo para inspecionar suas propriedades, dimensões e Psets.
+            <br /><br />
+            💡 <strong>Quantitativos (QTO):</strong> Segure <kbd className="px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 font-mono text-white">Shift</kbd> e clique em várias peças para somar automaticamente seus <strong>volumes (m³)</strong>, áreas e comprimentos.
+          </div>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div

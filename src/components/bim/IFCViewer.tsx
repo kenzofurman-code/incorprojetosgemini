@@ -45,9 +45,10 @@ import {
   Trash2,
 } from 'lucide-react'
 import type { IssueCategory } from '../../types'
-import { BIMMeasurementManager } from './bimMeasurement'
+import { BIMMeasurementManager, getSnappedPoint } from './bimMeasurement'
 import BIMPropertiesDrawer, { type SelectedBIMElement } from './BIMPropertiesDrawer'
 import BIMCategoryFilterModal, { type BIMCategoryItem } from './BIMCategoryFilterModal'
+import { FileSpreadsheet } from 'lucide-react'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -490,6 +491,11 @@ export default function IFCViewer({ onIssueCreated, modelLabel, className = '', 
       currentModelRef.current = model
 
       world.scene.three.add(model.object)
+      model.object.traverse(child => {
+        if (child instanceof THREE.Mesh) {
+          world.meshes.add(child)
+        }
+      })
 
       // Fit camera
       const bbox = new THREE.Box3().setFromObject(model.object)
@@ -586,15 +592,14 @@ export default function IFCViewer({ onIssueCreated, modelLabel, className = '', 
     const rect = containerRef.current.getBoundingClientRect()
     const x = ((e.clientX - rect.left) / rect.width) * 2 - 1
     const y = -((e.clientY - rect.top) / rect.height) * 2 + 1
-
     const raycaster = new THREE.Raycaster()
     raycaster.setFromCamera(new THREE.Vector2(x, y), world.camera.three)
-    const intersects = raycaster.intersectObjects(Array.from(world.meshes), true)
+    const targets: THREE.Object3D[] = [model.object, ...Array.from(world.meshes)]
+    const intersects = raycaster.intersectObjects(targets, true)
 
     if (intersects.length === 0) {
       if (mode === 'inspect' && !e.shiftKey) {
         setSelectedElements([])
-        setShowDrawer(false)
         await (model as any).resetColor()
       }
       return
@@ -604,13 +609,15 @@ export default function IFCViewer({ onIssueCreated, modelLabel, className = '', 
 
     // ── MODE: MEASURE ──
     if (mode === 'measure') {
-      const point = hit.point.clone()
+      const { point, isSnapped } = getSnappedPoint(hit)
       if (measurePoints.length === 0) {
         setMeasurePoints([point])
+        measurementManagerRef.current?.setSnapIndicator(point, isSnapped)
       } else {
         const p1 = measurePoints[0]
         measurementManagerRef.current?.addMeasurement(p1, point)
         measurementManagerRef.current?.clearPreview()
+        measurementManagerRef.current?.setSnapIndicator(null)
         setMeasurePoints([])
         setActiveMeasurementsCount(measurementManagerRef.current?.getMeasurements().length || 0)
       }
@@ -717,21 +724,31 @@ export default function IFCViewer({ onIssueCreated, modelLabel, className = '', 
     }
   }, [mode, measurePoints])
 
-  // Mouse move for 3D measurement preview line
+  // Mouse move for 3D measurement preview line & magnetic snap indicator
   const handleCanvasMouseMove = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
-    if (mode !== 'measure' || measurePoints.length === 0 || !worldRef.current || !containerRef.current) return
-
+    if (!worldRef.current || !containerRef.current || !currentModelRef.current) return
     const world = worldRef.current
-    const rect = containerRef.current.getBoundingClientRect()
-    const x = ((e.clientX - rect.left) / rect.width) * 2 - 1
-    const y = -((e.clientY - rect.top) / rect.height) * 2 + 1
+    const model = currentModelRef.current
 
-    const raycaster = new THREE.Raycaster()
-    raycaster.setFromCamera(new THREE.Vector2(x, y), world.camera.three)
-    const intersects = raycaster.intersectObjects(Array.from(world.meshes), true)
+    if (mode === 'measure') {
+      const rect = containerRef.current.getBoundingClientRect()
+      const x = ((e.clientX - rect.left) / rect.width) * 2 - 1
+      const y = -((e.clientY - rect.top) / rect.height) * 2 + 1
 
-    if (intersects.length > 0) {
-      measurementManagerRef.current?.updatePreview(measurePoints[0], intersects[0].point)
+      const raycaster = new THREE.Raycaster()
+      raycaster.setFromCamera(new THREE.Vector2(x, y), world.camera.three)
+      const targets: THREE.Object3D[] = [model.object, ...Array.from(world.meshes)]
+      const intersects = raycaster.intersectObjects(targets, true)
+
+      if (intersects.length > 0) {
+        const { point, isSnapped } = getSnappedPoint(intersects[0])
+        measurementManagerRef.current?.setSnapIndicator(point, isSnapped)
+        if (measurePoints.length > 0) {
+          measurementManagerRef.current?.updatePreview(measurePoints[0], point)
+        }
+      } else {
+        measurementManagerRef.current?.setSnapIndicator(null)
+      }
     }
   }, [mode, measurePoints])
 
@@ -973,6 +990,13 @@ export default function IFCViewer({ onIssueCreated, modelLabel, className = '', 
           onClick={() => setShowCategoriesModal(p => !p)}
         />
 
+        <ToolbarButton
+          icon={<FileSpreadsheet size={15} />}
+          label="Propriedades"
+          active={showDrawer}
+          onClick={() => setShowDrawer(p => !p)}
+        />
+
         {/* Camera Tools */}
         <div className="h-px my-0.5 bg-slate-800" />
         <ToolbarButton
@@ -1157,7 +1181,7 @@ export default function IFCViewer({ onIssueCreated, modelLabel, className = '', 
         )}
 
         {/* Properties / QTO Drawer */}
-        {showDrawer && selectedElements.length > 0 && (
+        {showDrawer && (
           <BIMPropertiesDrawer
             selectedElements={selectedElements}
             onClose={() => {
@@ -1169,7 +1193,6 @@ export default function IFCViewer({ onIssueCreated, modelLabel, className = '', 
             onFocus={handleFocus}
             onClearSelection={() => {
               setSelectedElements([])
-              setShowDrawer(false)
               ;(currentModelRef.current as any)?.resetColor()
             }}
           />

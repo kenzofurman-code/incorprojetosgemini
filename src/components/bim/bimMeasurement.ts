@@ -2,8 +2,8 @@
  * bimMeasurement.ts
  * ─────────────────────────────────────────────────────────────────────────────
  * Gerenciador de Cotas e Medições 3D para o visualizador BIM.
- * Traça linhas de medição no espaço Three.js, marcadores pontuais nos extremos
- * e etiquetas com valores reais de distância em metros (m).
+ * Traça linhas de medição no espaço Three.js, marcadores pontuais nos extremos,
+ * indicador visual de snap magnético em vértices/arestas e etiquetas com valores reais em metros.
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
@@ -17,12 +17,69 @@ export interface BIMMeasurement {
   group: THREE.Group
 }
 
+/** Calcula atração magnética (snap) para vértices e arestas do triângulo clicado */
+export function getSnappedPoint(hit: THREE.Intersection): { point: THREE.Vector3; isSnapped: boolean } {
+  const hitPoint = hit.point.clone()
+  if (!hit.face || !hit.object || !(hit.object instanceof THREE.Mesh)) {
+    return { point: hitPoint, isSnapped: false }
+  }
+
+  const geom = hit.object.geometry as THREE.BufferGeometry
+  const posAttr = geom.getAttribute('position')
+  if (!posAttr) return { point: hitPoint, isSnapped: false }
+
+  // Coordenadas mundiais dos 3 vértices do triângulo atingido
+  const vA = new THREE.Vector3().fromBufferAttribute(posAttr, hit.face.a).applyMatrix4(hit.object.matrixWorld)
+  const vB = new THREE.Vector3().fromBufferAttribute(posAttr, hit.face.b).applyMatrix4(hit.object.matrixWorld)
+  const vC = new THREE.Vector3().fromBufferAttribute(posAttr, hit.face.c).applyMatrix4(hit.object.matrixWorld)
+
+  // 1. Snap em Vértices (Raio de atração: 0.60m)
+  const dA = hitPoint.distanceTo(vA)
+  const dB = hitPoint.distanceTo(vB)
+  const dC = hitPoint.distanceTo(vC)
+  const minVertexDist = Math.min(dA, dB, dC)
+
+  if (minVertexDist < 0.60) {
+    if (minVertexDist === dA) return { point: vA.clone(), isSnapped: true }
+    if (minVertexDist === dB) return { point: vB.clone(), isSnapped: true }
+    if (minVertexDist === dC) return { point: vC.clone(), isSnapped: true }
+  }
+
+  // 2. Snap em Arestas (Linhas AB, BC, CA)
+  const lineAB = new THREE.Line3(vA, vB)
+  const lineBC = new THREE.Line3(vB, vC)
+  const lineCA = new THREE.Line3(vC, vA)
+
+  const pAB = new THREE.Vector3()
+  const pBC = new THREE.Vector3()
+  const pCA = new THREE.Vector3()
+
+  lineAB.closestPointToPoint(hitPoint, true, pAB)
+  lineBC.closestPointToPoint(hitPoint, true, pBC)
+  lineCA.closestPointToPoint(hitPoint, true, pCA)
+
+  const dAB = hitPoint.distanceTo(pAB)
+  const dBC = hitPoint.distanceTo(pBC)
+  const dCA = hitPoint.distanceTo(pCA)
+  const minEdgeDist = Math.min(dAB, dBC, dCA)
+
+  if (minEdgeDist < 0.35) {
+    if (minEdgeDist === dAB) return { point: pAB.clone(), isSnapped: true }
+    if (minEdgeDist === dBC) return { point: pBC.clone(), isSnapped: true }
+    if (minEdgeDist === dCA) return { point: pCA.clone(), isSnapped: true }
+  }
+
+  return { point: hitPoint, isSnapped: false }
+}
+
 export class BIMMeasurementManager {
   private scene: THREE.Scene
   private measurements: BIMMeasurement[] = []
   private lineMaterial: THREE.LineBasicMaterial
   private pointMaterial: THREE.MeshBasicMaterial
+  private snapMaterial: THREE.MeshBasicMaterial
   private previewGroup: THREE.Group | null = null
+  private snapIndicator: THREE.Mesh | null = null
 
   constructor(scene: THREE.Scene) {
     this.scene = scene
@@ -37,6 +94,36 @@ export class BIMMeasurementManager {
       depthTest: false,
       transparent: true,
     })
+    this.snapMaterial = new THREE.MeshBasicMaterial({
+      color: 0x06b6d4, // cyan-400
+      depthTest: false,
+      transparent: true,
+    })
+
+    // Cria indicador visual de snap
+    const snapGeo = new THREE.SphereGeometry(0.08, 16, 16)
+    this.snapIndicator = new THREE.Mesh(snapGeo, this.snapMaterial)
+    this.snapIndicator.renderOrder = 1001
+    this.snapIndicator.visible = false
+    this.scene.add(this.snapIndicator)
+  }
+
+  /** Atualiza ou oculta o indicador de snap magnético */
+  setSnapIndicator(point: THREE.Vector3 | null, isSnapped: boolean = false) {
+    if (!this.snapIndicator) return
+    if (!point) {
+      this.snapIndicator.visible = false
+      return
+    }
+    this.snapIndicator.position.copy(point)
+    this.snapIndicator.visible = true
+    if (isSnapped) {
+      this.snapIndicator.scale.set(1.4, 1.4, 1.4)
+      this.snapMaterial.color.setHex(0x06b6d4) // Cyan quando atraído
+    } else {
+      this.snapIndicator.scale.set(0.9, 0.9, 0.9)
+      this.snapMaterial.color.setHex(0xf97316) // Laranja quando livre
+    }
   }
 
   /** Cria uma etiqueta flutuante como Sprite Three.js com o texto de distância */
@@ -158,6 +245,7 @@ export class BIMMeasurementManager {
   /** Remove todas as cotas da cena */
   clearAll() {
     this.clearPreview()
+    this.setSnapIndicator(null)
     for (const m of this.measurements) {
       this.scene.remove(m.group)
     }
@@ -172,7 +260,12 @@ export class BIMMeasurementManager {
   /** Libera recursos Three.js */
   dispose() {
     this.clearAll()
+    if (this.snapIndicator) {
+      this.scene.remove(this.snapIndicator)
+      this.snapIndicator = null
+    }
     this.lineMaterial.dispose()
     this.pointMaterial.dispose()
+    this.snapMaterial.dispose()
   }
 }
