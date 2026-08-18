@@ -5,16 +5,18 @@
  * Integra:
  *  - Gerenciador de Camadas (Layers) com cores oficiais e isolamento
  *  - Alternador de Layouts (Model Space vs Paper Space / Pranchas)
- *  - Ferramenta de Cota e Medição 2D de Alta Precisão (WCS)
+ *  - Ferramenta de Cota e Medição 2D de Alta Precisão (WCS) com seletor de unidades (cm, m, mm)
+ *  - Remoção individual de cotas na prancha e na barra de ferramentas
+ *  - Criação de Issues com captura automática de screenshot com anotações
  *  - Inspeção de Entidades CAD com Spatial Picking
  *  - Coordenadas de Engenharia em Tempo Real
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
-import { useRef, useState, useCallback, useEffect } from 'react'
+import { useRef, useState, useCallback } from 'react'
 import {
   Upload, Move, ZoomIn, ZoomOut, Maximize2, MousePointer2, Loader2,
-  Layers, Ruler, Info, Trash2, CheckCircle2, AlertCircle
+  Layers, Ruler, Info, Trash2, CheckCircle2, AlertCircle, MessageSquarePlus, X
 } from 'lucide-react'
 import CADViewer, { type CADViewerHandle } from '../../components/cad/CADViewer'
 import { PageHeader } from '../../components/ui'
@@ -23,12 +25,57 @@ import type { AcApLayerSummary } from '@mlightcad/cad-simple-viewer'
 import CADLayersDrawer from '../../components/cad/CADLayersDrawer'
 import CADLayoutsBar, { type CADLayoutItem } from '../../components/cad/CADLayoutsBar'
 import CADEntityDrawer, { type SelectedCADEntity } from '../../components/cad/CADEntityDrawer'
-import { CADMeasurementManager, type CADMeasurementItem } from '../../components/cad/cadMeasurement'
+import CADIssueModal, { type CADPendingIssue, type CADCreatedIssue } from '../../components/cad/CADIssueModal'
+import {
+  CADMeasurementManager,
+  type CADMeasurementItem,
+  type CADUnit,
+  formatCADDistance
+} from '../../components/cad/cadMeasurement'
 
 type CADMode = 'pan' | 'zoom' | 'measure' | 'inspect' | null
 
+/** Captura screenshot combinando o canvas WebGL do CAD e as cotas desenhadas em SVG */
+async function captureCADScreenshot(
+  canvas: HTMLCanvasElement,
+  svgElement?: SVGSVGElement | null
+): Promise<string> {
+  const tempCanvas = document.createElement('canvas')
+  tempCanvas.width = canvas.width
+  tempCanvas.height = canvas.height
+  const ctx = tempCanvas.getContext('2d')
+  if (!ctx) return canvas.toDataURL('image/png')
+
+  // 1. Desenha o fundo e a geometria do CAD
+  ctx.drawImage(canvas, 0, 0)
+
+  // 2. Se houver cotas desenhadas no SVG, compõe por cima
+  if (svgElement) {
+    try {
+      const svgXml = new XMLSerializer().serializeToString(svgElement)
+      const svgBlob = new Blob([svgXml], { type: 'image/svg+xml;charset=utf-8' })
+      const url = URL.createObjectURL(svgBlob)
+      const img = new Image()
+      await new Promise((resolve) => {
+        img.onload = () => {
+          ctx.drawImage(img, 0, 0)
+          URL.revokeObjectURL(url)
+          resolve(true)
+        }
+        img.onerror = () => resolve(false)
+        img.src = url
+      })
+    } catch (err) {
+      console.warn('[CADPage] Erro ao renderizar anotações SVG no screenshot:', err)
+    }
+  }
+
+  return tempCanvas.toDataURL('image/png')
+}
+
 export default function CADPage() {
   const viewerRef = useRef<CADViewerHandle>(null)
+  const svgOverlayRef = useRef<SVGSVGElement | null>(null)
   const measurementManagerRef = useRef<CADMeasurementManager>(new CADMeasurementManager())
 
   const [loadedFile, setLoadedFile] = useState<string | null>(null)
@@ -36,6 +83,9 @@ export default function CADPage() {
   const [error, setError] = useState<string | null>(null)
   const [lastClick, setLastClick] = useState<CADCanvasClickEvent | null>(null)
   const [activeMode, setActiveMode] = useState<CADMode>('pan')
+
+  // Unidade do Desenho CAD
+  const [cadUnit, setCadUnit] = useState<CADUnit>('cm') // Centímetros padrão para pranchas brasileiras
 
   // Camadas (Layers)
   const [layers, setLayers] = useState<AcApLayerSummary[]>([])
@@ -53,7 +103,12 @@ export default function CADPage() {
   const [measurePoints, setMeasurePoints] = useState<{ x: number; y: number }[]>([])
   const [activeMeasurements, setActiveMeasurements] = useState<CADMeasurementItem[]>([])
   const [currentMouseWorld, setCurrentMouseWorld] = useState<{ x: number; y: number } | null>(null)
-  const [renderTick, setRenderTick] = useState(0)
+  const [, setRenderTick] = useState(0)
+
+  // Issues do CAD
+  const [pendingIssue, setPendingIssue] = useState<CADPendingIssue | null>(null)
+  const [, setIssues] = useState<CADCreatedIssue[]>([])
+  const [issueToast, setIssueToast] = useState<string | null>(null)
 
   // Atualiza tabela de camadas e layouts após abrir arquivo
   const refreshMetadata = useCallback(() => {
@@ -67,7 +122,6 @@ export default function CADPage() {
     }, 400)
   }, [])
 
-  // Força re-render do SVG de cotas durante interação
   const triggerRedraw = useCallback(() => {
     setRenderTick(t => t + 1)
   }, [])
@@ -161,6 +215,51 @@ export default function CADPage() {
     viewerRef.current?.setLayout(layoutName)
   }
 
+  // ── Handlers de Medições / Cotas ─────────────────────────────────────────
+  const handleDeleteCota = (id: string) => {
+    measurementManagerRef.current.removeMeasurement(id)
+    setActiveMeasurements([...measurementManagerRef.current.getMeasurements()])
+    triggerRedraw()
+  }
+
+  const handleClearAllCotas = () => {
+    measurementManagerRef.current.clearAll()
+    setActiveMeasurements([])
+    setMeasurePoints([])
+    triggerRedraw()
+  }
+
+  // ── Handler de Criação de Issue ──────────────────────────────────────────
+  const handleStartCreateIssue = async () => {
+    const manager = viewerRef.current?.getManager()
+    const canvas = manager?.curView?.canvas
+    if (!canvas) {
+      alert('Abra um desenho CAD antes de criar uma issue.')
+      return
+    }
+
+    try {
+      const screenshot = await captureCADScreenshot(canvas, svgOverlayRef.current)
+      setPendingIssue({
+        screenshotDataUrl: screenshot,
+        fileName: loadedFile || 'desenho.dwg',
+        title: selectedEntity ? `Revisão: ${selectedEntity.entityType} (Layer ${selectedEntity.layerName})` : '',
+        category: 'conflito_projeto',
+        priority: 'alta',
+      })
+    } catch (err) {
+      console.error('[CADPage] Erro ao capturar screenshot:', err)
+      alert('Erro ao capturar screenshot da prancha CAD.')
+    }
+  }
+
+  const handleConfirmIssue = (issue: CADCreatedIssue) => {
+    setIssues(prev => [issue, ...prev])
+    setPendingIssue(null)
+    setIssueToast(`Issue "${issue.title}" registrada com sucesso!`)
+    setTimeout(() => setIssueToast(null), 3500)
+  }
+
   // ── Toolbar helpers ───────────────────────────────────────────────────────
   function activatePan() {
     setActiveMode('pan')
@@ -199,12 +298,22 @@ export default function CADPage() {
     <div className="h-full flex flex-col gap-3">
       <PageHeader
         title="Visualizador CAD Avançado (DWG / DXF)"
-        subtitle="Visualização técnica com gerenciador de layers, layouts de prancha, cotas e inspeção de entidades"
+        subtitle="Visualização técnica com gerenciador de layers, layouts de prancha, cotas e criação de issues"
         actions={
           <div className="flex items-center gap-2">
-            <label
-              className="flex items-center gap-2 px-3 py-1.5 text-xs font-semibold rounded-xl cursor-pointer transition-all shadow-md active:scale-95 text-white"
+            <button
+              onClick={handleStartCreateIssue}
+              disabled={!loadedFile || isLoading}
+              className="flex items-center gap-2 px-3.5 py-2 text-xs font-bold rounded-xl transition-all shadow-md active:scale-95 text-white disabled:opacity-40 disabled:cursor-not-allowed"
               style={{ background: 'linear-gradient(135deg, var(--orange), #c2410c)' }}
+              title="Capturar frame da prancha e abrir formulário de Issue"
+            >
+              <MessageSquarePlus size={15} />
+              CRIAR ISSUE CAD
+            </button>
+
+            <label
+              className="flex items-center gap-2 px-3.5 py-2 text-xs font-semibold rounded-xl cursor-pointer transition-all shadow-md active:scale-95 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700"
             >
               <Upload size={14} />
               {isLoading ? 'Carregando...' : 'Abrir DWG / DXF'}
@@ -219,6 +328,14 @@ export default function CADPage() {
           </div>
         }
       />
+
+      {/* ── Toast de confirmação de Issue ─────────────────────────────────── */}
+      {issueToast && (
+        <div className="fixed top-5 right-5 z-50 flex items-center gap-2 px-4 py-3 rounded-2xl bg-emerald-950/90 border border-emerald-500/40 text-emerald-300 text-xs font-semibold shadow-2xl backdrop-blur-md animate-in slide-in-from-top-4">
+          <CheckCircle2 size={16} className="text-emerald-400 flex-shrink-0" />
+          <span>{issueToast}</span>
+        </div>
+      )}
 
       {/* ── Toolbar de controles ─────────────────────────────────────────── */}
       <div className="flex items-center justify-between gap-2 flex-wrap bg-slate-900/60 p-2 rounded-2xl border border-slate-800 backdrop-blur-sm">
@@ -357,32 +474,88 @@ export default function CADPage() {
           </div>
         )}
 
-        {/* Banner Modo Medir Ativo */}
+        {/* Banner Modo Medir Ativo com Seletor de Unidades e Lista de Cotas */}
         {activeMode === 'measure' && (
-          <div className="absolute top-3 left-3 flex items-center gap-2 px-3.5 py-1.5 rounded-xl bg-slate-900/90 border border-slate-700 shadow-xl text-xs z-30 text-white backdrop-blur-md">
-            <Ruler size={14} className="text-orange-400" />
-            <span className="font-bold">Modo Medição 2D:</span>
-            <span className="text-slate-300">
-              {measurePoints.length === 0 ? 'Clique no 1º ponto para iniciar a cota' : 'Clique no 2º ponto para finalizar'}
-            </span>
-            {activeMeasurements.length > 0 && (
-              <button
-                onClick={() => {
-                  measurementManagerRef.current.clearAll()
-                  setActiveMeasurements([])
-                  setMeasurePoints([])
-                }}
-                className="ml-2 text-xs text-red-400 hover:text-red-300 font-semibold flex items-center gap-1"
-              >
-                <Trash2 size={12} /> Limpar Cotas ({activeMeasurements.length})
-              </button>
-            )}
+          <div className="absolute top-3 left-3 right-3 flex items-center justify-between gap-3 px-3.5 py-2 rounded-2xl bg-slate-900/95 border border-slate-700 shadow-2xl text-xs z-30 text-white backdrop-blur-md flex-wrap">
+            <div className="flex items-center gap-3 flex-wrap">
+              <div className="flex items-center gap-1.5">
+                <Ruler size={15} className="text-orange-400" />
+                <span className="font-bold">Modo Medição:</span>
+                <span className="text-slate-300">
+                  {measurePoints.length === 0 ? 'Clique no 1º ponto' : 'Clique no 2º ponto para fechar'}
+                </span>
+              </div>
+
+              {/* Seletor de Unidade */}
+              <div className="flex items-center gap-1 bg-slate-950/80 px-2 py-1 rounded-xl border border-slate-800">
+                <span className="text-[10px] text-slate-400 font-semibold uppercase">Escala:</span>
+                <button
+                  onClick={() => { setCadUnit('cm'); triggerRedraw() }}
+                  className={`px-2 py-0.5 rounded-lg text-[11px] font-bold transition-colors ${
+                    cadUnit === 'cm' ? 'bg-orange-500 text-white shadow-sm' : 'text-slate-400 hover:text-white'
+                  }`}
+                  title="1 unidade CAD = 1 centímetro (padrão Brasil)"
+                >
+                  cm (Centímetros)
+                </button>
+                <button
+                  onClick={() => { setCadUnit('m'); triggerRedraw() }}
+                  className={`px-2 py-0.5 rounded-lg text-[11px] font-bold transition-colors ${
+                    cadUnit === 'm' ? 'bg-orange-500 text-white shadow-sm' : 'text-slate-400 hover:text-white'
+                  }`}
+                  title="1 unidade CAD = 1 metro"
+                >
+                  m (Metros)
+                </button>
+                <button
+                  onClick={() => { setCadUnit('mm'); triggerRedraw() }}
+                  className={`px-2 py-0.5 rounded-lg text-[11px] font-bold transition-colors ${
+                    cadUnit === 'mm' ? 'bg-orange-500 text-white shadow-sm' : 'text-slate-400 hover:text-white'
+                  }`}
+                  title="1 unidade CAD = 1 milímetro"
+                >
+                  mm (Milímetros)
+                </button>
+              </div>
+            </div>
+
+            {/* Lista de cotas ativas com botão individual de exclusão */}
+            <div className="flex items-center gap-2 flex-wrap">
+              {activeMeasurements.map((m, idx) => (
+                <div
+                  key={m.id}
+                  className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-slate-800/90 border border-slate-700 text-[11px] font-mono text-orange-400"
+                >
+                  <span>#{idx + 1}: {formatCADDistance(m.rawDistance, cadUnit)}</span>
+                  <button
+                    onClick={() => handleDeleteCota(m.id)}
+                    className="p-0.5 rounded hover:bg-red-500/20 text-slate-400 hover:text-red-400 transition-colors"
+                    title="Apagar esta cota"
+                  >
+                    <X size={12} />
+                  </button>
+                </div>
+              ))}
+
+              {activeMeasurements.length > 0 && (
+                <button
+                  onClick={handleClearAllCotas}
+                  className="text-xs text-red-400 hover:text-red-300 font-semibold flex items-center gap-1 px-2 py-1 rounded-lg hover:bg-red-500/10 transition-colors"
+                >
+                  <Trash2 size={12} /> Limpar Todas
+                </button>
+              )}
+            </div>
           </div>
         )}
 
         {/* SVG Overlay para desenho das linhas de cota 2D */}
         {viewerRef.current && (activeMeasurements.length > 0 || measurePoints.length > 0) && (
-          <svg className="absolute inset-0 pointer-events-none z-20 w-full h-full">
+          <svg
+            id="cad-measure-svg"
+            ref={svgOverlayRef}
+            className="absolute inset-0 pointer-events-none z-20 w-full h-full"
+          >
             <defs>
               <marker id="cad-arrow" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
                 <path d="M 0 0 L 10 5 L 0 10 z" fill="#f97316" />
@@ -390,16 +563,17 @@ export default function CADPage() {
             </defs>
 
             {/* Medições confirmadas */}
-            {activeMeasurements.map(m => {
+            {activeMeasurements.map((m, idx) => {
               const p1Screen = viewerRef.current?.worldToScreen(m.startWorld.x, m.startWorld.y)
               const p2Screen = viewerRef.current?.worldToScreen(m.endWorld.x, m.endWorld.y)
               if (!p1Screen || !p2Screen) return null
 
               const midX = (p1Screen.x + p2Screen.x) / 2
               const midY = (p1Screen.y + p2Screen.y) / 2
+              const label = formatCADDistance(m.rawDistance, cadUnit)
 
               return (
-                <g key={m.id}>
+                <g key={m.id} className="pointer-events-auto">
                   {/* Linha da cota */}
                   <line
                     x1={p1Screen.x}
@@ -412,22 +586,24 @@ export default function CADPage() {
                     markerEnd="url(#cad-arrow)"
                   />
                   {/* Marcadores pontuais */}
-                  <circle cx={p1Screen.x} cy={p1Screen.y} r="4" fill="#22c55e" stroke="#ffffff" strokeWidth="1.5" />
-                  <circle cx={p2Screen.x} cy={p2Screen.y} r="4" fill="#22c55e" stroke="#ffffff" strokeWidth="1.5" />
-                  {/* Etiqueta da distância */}
-                  <g transform={`translate(${midX}, ${midY - 12})`}>
+                  <circle cx={p1Screen.x} cy={p1Screen.y} r="4.5" fill="#22c55e" stroke="#ffffff" strokeWidth="1.5" />
+                  <circle cx={p2Screen.x} cy={p2Screen.y} r="4.5" fill="#22c55e" stroke="#ffffff" strokeWidth="1.5" />
+
+                  {/* Etiqueta da distância com botão de exclusão */}
+                  <g transform={`translate(${midX}, ${midY - 14})`}>
                     <rect
-                      x="-38"
+                      x="-48"
                       y="-12"
-                      width="76"
+                      width="96"
                       height="24"
-                      rx="6"
+                      rx="8"
                       fill="#0f1923"
                       stroke="#f97316"
                       strokeWidth="1.5"
+                      className="shadow-lg"
                     />
                     <text
-                      x="0"
+                      x="-8"
                       y="4"
                       textAnchor="middle"
                       fill="#ffffff"
@@ -435,8 +611,18 @@ export default function CADPage() {
                       fontWeight="bold"
                       fontFamily="monospace"
                     >
-                      {m.label}
+                      {label}
                     </text>
+                    {/* Botão X para apagar esta cota diretamente no desenho */}
+                    <g
+                      transform="translate(36, 0)"
+                      className="cursor-pointer"
+                      onClick={() => handleDeleteCota(m.id)}
+                    >
+                      <circle cx="0" cy="0" r="7" fill="#ef4444" opacity="0.9" />
+                      <line x1="-3" y1="-3" x2="3" y2="3" stroke="#ffffff" strokeWidth="1.5" />
+                      <line x1="3" y1="-3" x2="-3" y2="3" stroke="#ffffff" strokeWidth="1.5" />
+                    </g>
                   </g>
                 </g>
               )
@@ -451,9 +637,10 @@ export default function CADPage() {
 
                 const dx = currentMouseWorld.x - measurePoints[0].x
                 const dy = currentMouseWorld.y - measurePoints[0].y
-                const dist = Math.hypot(dx, dy)
+                const rawDist = Math.hypot(dx, dy)
                 const midX = (p1Screen.x + p2Screen.x) / 2
                 const midY = (p1Screen.y + p2Screen.y) / 2
+                const label = formatCADDistance(rawDist, cadUnit)
 
                 return (
                   <g>
@@ -468,13 +655,13 @@ export default function CADPage() {
                     />
                     <circle cx={p1Screen.x} cy={p1Screen.y} r="4" fill="#22c55e" stroke="#ffffff" strokeWidth="1.5" />
                     <circle cx={p2Screen.x} cy={p2Screen.y} r="4" fill="#f97316" stroke="#ffffff" strokeWidth="1.5" />
-                    <g transform={`translate(${midX}, ${midY - 12})`}>
+                    <g transform={`translate(${midX}, ${midY - 14})`}>
                       <rect
-                        x="-38"
+                        x="-48"
                         y="-12"
-                        width="76"
+                        width="96"
                         height="24"
-                        rx="6"
+                        rx="8"
                         fill="#0f1923"
                         stroke="#f97316"
                         strokeWidth="1.5"
@@ -488,7 +675,7 @@ export default function CADPage() {
                         fontWeight="bold"
                         fontFamily="monospace"
                       >
-                        {dist.toFixed(2)} m
+                        {label}
                       </text>
                     </g>
                   </g>
@@ -600,6 +787,15 @@ export default function CADPage() {
             onClose={() => setShowEntityDrawer(false)}
           />
         )}
+
+        {/* Modal de Criação de Issue CAD */}
+        {pendingIssue && (
+          <CADIssueModal
+            pending={pendingIssue}
+            onConfirm={handleConfirmIssue}
+            onCancel={() => setPendingIssue(null)}
+          />
+        )}
       </div>
 
       {/* ── Barra de Status e Coordenadas ─────────────────────────────────── */}
@@ -621,6 +817,8 @@ export default function CADPage() {
         </div>
 
         <div className="flex items-center gap-3 text-[11px] text-slate-500">
+          <span>Escala: <strong className="text-white uppercase">{cadUnit}</strong></span>
+          <span>•</span>
           <span>Modo: <strong className="text-slate-300 uppercase">{activeMode || 'Navegar'}</strong></span>
           <span>•</span>
           <span>Layout: <strong className="text-orange-400">{activeLayout}</strong></span>
