@@ -9,6 +9,7 @@
  * - Layouts (Model Space vs Paper Space)
  * - Coordenadas reais de engenharia (WCS)
  * - Inspeção e picking de entidades
+ * - Sistema Nativo WebGL de Medições e Snap Magnético (Zero Lag)
  *
  * Dependência: @mlightcad/cad-simple-viewer
  * ─────────────────────────────────────────────────────────────────────────
@@ -23,6 +24,11 @@ import {
 } from '@mlightcad/cad-simple-viewer'
 import type { SelectedCADEntity } from './CADEntityDrawer'
 import type { CADLayoutItem } from './CADLayoutsBar'
+import {
+  CADNativeMeasurementManager,
+  getSnappedCADPoint,
+  type CADSnapResult
+} from './cadMeasurement'
 
 // ─── Worker URLs ──────────────────────────────────────────────────────────────
 const WORKER_URLS: AcApWebworkerFiles = {
@@ -38,6 +44,8 @@ export interface CADCanvasClickEvent {
   screenY: number
   worldX: number
   worldY: number
+  snappedPoint?: { x: number; y: number }
+  isSnapped?: boolean
   originalEvent: MouseEvent
 }
 
@@ -69,6 +77,10 @@ export interface CADViewerInstance {
   pickEntity: (screenX: number, screenY: number) => SelectedCADEntity | null
   screenToWorld: (screenX: number, screenY: number) => { x: number; y: number }
   worldToScreen: (worldX: number, worldY: number) => { x: number; y: number }
+
+  // ── Medição Nativa WebGL e Snap Magnético ──
+  measurementManager: CADNativeMeasurementManager
+  getSnapPoint: (screenX: number, screenY: number, worldX: number, worldY: number) => CADSnapResult
 }
 
 export interface CADViewerInitOptions {
@@ -115,7 +127,13 @@ export async function initCADViewer(opts: CADViewerInitOptions): Promise<CADView
     view.canvas.style.background = `#${background.toString(16).padStart(6, '0')}`
   }
 
-  // 4. Click Handler
+  // 4. Instanciar Gerenciador Nativo WebGL de Medições
+  const measurementManager = new CADNativeMeasurementManager()
+  if (view?.internalScene) {
+    measurementManager.bind(view.internalScene, view)
+  }
+
+  // 5. Click Handler
   const clickHandlers = new Set<CADClickHandler>()
 
   function handleCanvasClick(e: MouseEvent) {
@@ -137,13 +155,24 @@ export async function initCADViewer(opts: CADViewerInitOptions): Promise<CADView
       } catch { /* silence */ }
     }
 
-    const event: CADCanvasClickEvent = { screenX, screenY, worldX, worldY, originalEvent: e }
+    // Calcula snap no clique
+    const snap = getSnappedCADPoint(currentView, screenX, screenY, worldX, worldY)
+
+    const event: CADCanvasClickEvent = {
+      screenX,
+      screenY,
+      worldX,
+      worldY,
+      snappedPoint: snap.point,
+      isSnapped: snap.isSnapped,
+      originalEvent: e,
+    }
     clickHandlers.forEach(h => h(event))
   }
 
   container.addEventListener('click', handleCanvasClick)
 
-  // 5. Scroll Zoom
+  // 6. Scroll Zoom
   function handleWheel(e: WheelEvent) {
     e.preventDefault()
     const cmd = e.deltaY < 0 ? 'zoomin' : 'zoomout'
@@ -153,7 +182,7 @@ export async function initCADViewer(opts: CADViewerInitOptions): Promise<CADView
   }
   container.addEventListener('wheel', handleWheel, { passive: false })
 
-  // 6. Funções de Carregamento e Navegação
+  // 7. Funções de Carregamento e Navegação
   async function loadFile(fileName: string, buffer: ArrayBuffer): Promise<boolean> {
     const isDxf = fileName.toLowerCase().endsWith('.dxf')
     const virtualFileName = isDxf ? 'model.dxf' : 'model.dwg'
@@ -185,6 +214,13 @@ export async function initCADViewer(opts: CADViewerInitOptions): Promise<CADView
       if (!success && lastError) {
         throw new Error(lastError)
       }
+
+      // Re-vincula a cena Three.js após abrir o documento
+      const v = manager.curView
+      if (v?.internalScene) {
+        measurementManager.bind(v.internalScene, v)
+      }
+
       return success
     } finally {
       if (doc?.database?.events?.openProgress?.removeEventListener) {
@@ -322,7 +358,6 @@ export async function initCADViewer(opts: CADViewerInitOptions): Promise<CADView
     if (!doc?.database) return layouts
 
     try {
-      // Extrai nomes de layouts se disponíveis
       const db = doc.database as any
       if (db.layoutManager?.layouts) {
         const customLayouts = Object.keys(db.layoutManager.layouts)
@@ -419,10 +454,16 @@ export async function initCADViewer(opts: CADViewerInitOptions): Promise<CADView
     return { x: worldX, y: worldY }
   }
 
+  function getSnapPoint(screenX: number, screenY: number, worldX: number, worldY: number): CADSnapResult {
+    const v = manager.curView
+    return getSnappedCADPoint(v, screenX, screenY, worldX, worldY)
+  }
+
   function dispose() {
     container.removeEventListener('click', handleCanvasClick)
     container.removeEventListener('wheel', handleWheel)
     clickHandlers.clear()
+    measurementManager.dispose()
     try { manager.destroy?.() } catch { /* silence */ }
   }
 
@@ -450,6 +491,8 @@ export async function initCADViewer(opts: CADViewerInitOptions): Promise<CADView
     pickEntity,
     screenToWorld,
     worldToScreen,
+    measurementManager,
+    getSnapPoint,
   }
 }
 

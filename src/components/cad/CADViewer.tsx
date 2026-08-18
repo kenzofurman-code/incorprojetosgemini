@@ -7,7 +7,7 @@
  *  - Gerenciar o ciclo de vida do viewer (init / dispose) via useEffect
  *  - Expor via ref imperativa (useImperativeHandle) os métodos do core
  *  - Tratar o FileReader para converter File → ArrayBuffer e passar ao core
- *  - Expor APIs de Camadas, Layouts, Picking e Medição para o CADPage
+ *  - Expor APIs de Camadas, Layouts, Picking, Medições Nativas WebGL e Snap
  * ─────────────────────────────────────────────────────────────────────────
  */
 
@@ -27,6 +27,7 @@ import {
 import type { AcApLayerSummary } from '@mlightcad/cad-simple-viewer'
 import type { SelectedCADEntity } from './CADEntityDrawer'
 import type { CADLayoutItem } from './CADLayoutsBar'
+import type { CADMeasurementItem, CADUnit, CADSnapResult, CADPoint2D, CADSnapType } from './cadMeasurement'
 
 // ─── Public handle (exposto via ref ao componente pai) ───────────────────────
 
@@ -54,10 +55,21 @@ export interface CADViewerHandle {
   getLayouts: () => CADLayoutItem[]
   setLayout: (layoutName: string) => void
 
-  // Inspeção e Medição
+  // Inspeção e Coordenadas
   pickEntity: (screenX: number, screenY: number) => SelectedCADEntity | null
   screenToWorld: (screenX: number, screenY: number) => { x: number; y: number }
   worldToScreen: (worldX: number, worldY: number) => { x: number; y: number }
+
+  // Medição Nativa WebGL e Snap
+  getSnapPoint: (screenX: number, screenY: number, worldX: number, worldY: number) => CADSnapResult
+  setSnapIndicator: (pt: CADPoint2D | null, isSnapped?: boolean, snapType?: CADSnapType) => void
+  addMeasurement: (startWorld: CADPoint2D, endWorld: CADPoint2D) => CADMeasurementItem | null
+  updateMeasurePreview: (startWorld: CADPoint2D, currentWorld: CADPoint2D) => void
+  clearMeasurePreview: () => void
+  removeMeasurement: (id: string) => void
+  clearAllMeasurements: () => void
+  setMeasurementUnit: (unit: CADUnit) => void
+  getMeasurements: () => CADMeasurementItem[]
 }
 
 // ─── Props ───────────────────────────────────────────────────────────────────
@@ -199,10 +211,21 @@ const CADViewer = forwardRef<CADViewerHandle, CADViewerProps>(function CADViewer
     getLayouts: () => viewerRef.current?.getLayouts() ?? [{ name: 'Model', isModel: true }],
     setLayout: (name) => viewerRef.current?.setLayout(name),
 
-    // Inspeção e Medição
+    // Inspeção e Coordenadas
     pickEntity: (sx, sy) => viewerRef.current?.pickEntity(sx, sy) ?? null,
     screenToWorld: (sx, sy) => viewerRef.current?.screenToWorld(sx, sy) ?? { x: sx, y: sy },
     worldToScreen: (wx, wy) => viewerRef.current?.worldToScreen(wx, wy) ?? { x: wx, y: wy },
+
+    // Medição Nativa WebGL e Snap
+    getSnapPoint: (sx, sy, wx, wy) => viewerRef.current?.getSnapPoint(sx, sy, wx, wy) ?? { point: { x: wx, y: wy }, isSnapped: false, snapType: 'none' },
+    setSnapIndicator: (pt, isSnapped, snapType) => viewerRef.current?.measurementManager.setSnapIndicator(pt, isSnapped, snapType),
+    addMeasurement: (p1, p2) => viewerRef.current?.measurementManager.addMeasurement(p1, p2) ?? null,
+    updateMeasurePreview: (p1, p2) => viewerRef.current?.measurementManager.updatePreview(p1, p2),
+    clearMeasurePreview: () => viewerRef.current?.measurementManager.clearPreview(),
+    removeMeasurement: (id) => viewerRef.current?.measurementManager.removeMeasurement(id),
+    clearAllMeasurements: () => viewerRef.current?.measurementManager.clearAll(),
+    setMeasurementUnit: (unit) => viewerRef.current?.measurementManager.setUnit(unit),
+    getMeasurements: () => viewerRef.current?.measurementManager.getMeasurements() ?? [],
   }), [loadFile])
 
   return (

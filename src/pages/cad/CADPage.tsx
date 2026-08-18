@@ -3,20 +3,21 @@
  * ─────────────────────────────────────────────────────────────────────────────
  * Página Completa do Visualizador CAD Avançado (DWG / DXF).
  * Integra:
- *  - Gerenciador de Camadas (Layers) com cores oficiais e isolamento
+ *  - Sistema Nativo WebGL Three.js de Cotas e Medições (Zero Lag no Zoom/Pan)
+ *  - Snap Magnético Automático em Extremidades, Pontos Médios e Vértices
+ *  - Seletor de Escala/Unidade do Desenho (cm / m / mm)
+ *  - Exclusão Individual de Cotas
+ *  - Criação de Issues CAD com Captura Automática de Screenshot
+ *  - Gerenciador Completo de Camadas (Layers)
  *  - Alternador de Layouts (Model Space vs Paper Space / Pranchas)
- *  - Ferramenta de Cota e Medição 2D de Alta Precisão (WCS) com seletor de unidades (cm, m, mm)
- *  - Remoção individual de cotas na prancha e na barra de ferramentas
- *  - Criação de Issues com captura automática de screenshot com anotações
- *  - Inspeção de Entidades CAD com Spatial Picking
- *  - Coordenadas de Engenharia em Tempo Real
+ *  - Inspeção de Entidades CAD
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
-import { useRef, useState, useCallback } from 'react'
+import { useRef, useState, useCallback, useEffect } from 'react'
 import {
   Upload, Move, ZoomIn, ZoomOut, Maximize2, MousePointer2, Loader2,
-  Layers, Ruler, Info, Trash2, CheckCircle2, AlertCircle, MessageSquarePlus, X
+  Layers, Ruler, Info, Trash2, CheckCircle2, AlertCircle, MessageSquarePlus, X, Magnet
 } from 'lucide-react'
 import CADViewer, { type CADViewerHandle } from '../../components/cad/CADViewer'
 import { PageHeader } from '../../components/ui'
@@ -27,7 +28,6 @@ import CADLayoutsBar, { type CADLayoutItem } from '../../components/cad/CADLayou
 import CADEntityDrawer, { type SelectedCADEntity } from '../../components/cad/CADEntityDrawer'
 import CADIssueModal, { type CADPendingIssue, type CADCreatedIssue } from '../../components/cad/CADIssueModal'
 import {
-  CADMeasurementManager,
   type CADMeasurementItem,
   type CADUnit,
   formatCADDistance
@@ -35,48 +35,8 @@ import {
 
 type CADMode = 'pan' | 'zoom' | 'measure' | 'inspect' | null
 
-/** Captura screenshot combinando o canvas WebGL do CAD e as cotas desenhadas em SVG */
-async function captureCADScreenshot(
-  canvas: HTMLCanvasElement,
-  svgElement?: SVGSVGElement | null
-): Promise<string> {
-  const tempCanvas = document.createElement('canvas')
-  tempCanvas.width = canvas.width
-  tempCanvas.height = canvas.height
-  const ctx = tempCanvas.getContext('2d')
-  if (!ctx) return canvas.toDataURL('image/png')
-
-  // 1. Desenha o fundo e a geometria do CAD
-  ctx.drawImage(canvas, 0, 0)
-
-  // 2. Se houver cotas desenhadas no SVG, compõe por cima
-  if (svgElement) {
-    try {
-      const svgXml = new XMLSerializer().serializeToString(svgElement)
-      const svgBlob = new Blob([svgXml], { type: 'image/svg+xml;charset=utf-8' })
-      const url = URL.createObjectURL(svgBlob)
-      const img = new Image()
-      await new Promise((resolve) => {
-        img.onload = () => {
-          ctx.drawImage(img, 0, 0)
-          URL.revokeObjectURL(url)
-          resolve(true)
-        }
-        img.onerror = () => resolve(false)
-        img.src = url
-      })
-    } catch (err) {
-      console.warn('[CADPage] Erro ao renderizar anotações SVG no screenshot:', err)
-    }
-  }
-
-  return tempCanvas.toDataURL('image/png')
-}
-
 export default function CADPage() {
   const viewerRef = useRef<CADViewerHandle>(null)
-  const svgOverlayRef = useRef<SVGSVGElement | null>(null)
-  const measurementManagerRef = useRef<CADMeasurementManager>(new CADMeasurementManager())
 
   const [loadedFile, setLoadedFile] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(false)
@@ -99,11 +59,10 @@ export default function CADPage() {
   const [selectedEntity, setSelectedEntity] = useState<SelectedCADEntity | null>(null)
   const [showEntityDrawer, setShowEntityDrawer] = useState(false)
 
-  // Medição 2D
+  // Medição Nativa Three.js
   const [measurePoints, setMeasurePoints] = useState<{ x: number; y: number }[]>([])
   const [activeMeasurements, setActiveMeasurements] = useState<CADMeasurementItem[]>([])
-  const [currentMouseWorld, setCurrentMouseWorld] = useState<{ x: number; y: number } | null>(null)
-  const [, setRenderTick] = useState(0)
+  const [isSnappedHover, setIsSnappedHover] = useState(false)
 
   // Issues do CAD
   const [pendingIssue, setPendingIssue] = useState<CADPendingIssue | null>(null)
@@ -119,12 +78,11 @@ export default function CADPage() {
 
       const docLayouts = viewerRef.current?.getLayouts() || [{ name: 'Model', isModel: true }]
       setLayouts(docLayouts)
-    }, 400)
-  }, [])
 
-  const triggerRedraw = useCallback(() => {
-    setRenderTick(t => t + 1)
-  }, [])
+      // Atualiza unidade nas medições
+      viewerRef.current?.setMeasurementUnit(cadUnit)
+    }, 400)
+  }, [cadUnit])
 
   // ── Handlers de arquivo ──────────────────────────────────────────────────
   async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
@@ -132,7 +90,7 @@ export default function CADPage() {
     if (!file) return
     setError(null)
     setIsLoading(true)
-    measurementManagerRef.current.clearAll()
+    viewerRef.current?.clearAllMeasurements()
     setActiveMeasurements([])
     setMeasurePoints([])
     setSelectedEntity(null)
@@ -145,7 +103,6 @@ export default function CADPage() {
   // ── Handler de clique no canvas ──────────────────────────────────────────
   const handleCanvasClick = useCallback((evt: CADCanvasClickEvent) => {
     setLastClick(evt)
-    triggerRedraw()
 
     // MODO: INSPECT (Picking de entidade)
     if (activeMode === 'inspect') {
@@ -158,20 +115,25 @@ export default function CADPage() {
       return
     }
 
-    // MODO: MEASURE (Cota 2D ponto a ponto)
-    if (activeMode === 'measure') {
-      const clickPoint = { x: evt.worldX, y: evt.worldY }
+    // MODO: MEASURE (Cota Nativa Three.js ponto a ponto com Snap)
+    if (activeMode === 'measure' && viewerRef.current) {
+      const snap = viewerRef.current.getSnapPoint(evt.screenX, evt.screenY, evt.worldX, evt.worldY)
+      const clickPoint = snap.point
+
       if (measurePoints.length === 0) {
         setMeasurePoints([clickPoint])
+        viewerRef.current.setSnapIndicator(clickPoint, snap.isSnapped, snap.snapType)
       } else {
         const p1 = measurePoints[0]
-        measurementManagerRef.current.addMeasurement(p1, clickPoint)
-        setActiveMeasurements([...measurementManagerRef.current.getMeasurements()])
+        viewerRef.current.addMeasurement(p1, clickPoint)
+        viewerRef.current.clearMeasurePreview()
+        viewerRef.current.setSnapIndicator(null)
         setMeasurePoints([])
+        setActiveMeasurements([...viewerRef.current.getMeasurements()])
       }
       return
     }
-  }, [activeMode, measurePoints, triggerRedraw])
+  }, [activeMode, measurePoints])
 
   // ── Handlers de Camadas (Layers) ─────────────────────────────────────────
   const handleToggleLayerOn = (layerName: string, currentlyOn: boolean) => {
@@ -217,20 +179,23 @@ export default function CADPage() {
 
   // ── Handlers de Medições / Cotas ─────────────────────────────────────────
   const handleDeleteCota = (id: string) => {
-    measurementManagerRef.current.removeMeasurement(id)
-    setActiveMeasurements([...measurementManagerRef.current.getMeasurements()])
-    triggerRedraw()
+    viewerRef.current?.removeMeasurement(id)
+    setActiveMeasurements([...viewerRef.current?.getMeasurements() || []])
   }
 
   const handleClearAllCotas = () => {
-    measurementManagerRef.current.clearAll()
+    viewerRef.current?.clearAllMeasurements()
     setActiveMeasurements([])
     setMeasurePoints([])
-    triggerRedraw()
+  }
+
+  const handleUnitChange = (unit: CADUnit) => {
+    setCadUnit(unit)
+    viewerRef.current?.setMeasurementUnit(unit)
   }
 
   // ── Handler de Criação de Issue ──────────────────────────────────────────
-  const handleStartCreateIssue = async () => {
+  const handleStartCreateIssue = () => {
     const manager = viewerRef.current?.getManager()
     const canvas = manager?.curView?.canvas
     if (!canvas) {
@@ -239,7 +204,8 @@ export default function CADPage() {
     }
 
     try {
-      const screenshot = await captureCADScreenshot(canvas, svgOverlayRef.current)
+      // Como as cotas estão na cena Three.js do canvas, toDataURL já captura tudo nativamente!
+      const screenshot = canvas.toDataURL('image/png')
       setPendingIssue({
         screenshotDataUrl: screenshot,
         fileName: loadedFile || 'desenho.dwg',
@@ -264,33 +230,49 @@ export default function CADPage() {
   function activatePan() {
     setActiveMode('pan')
     viewerRef.current?.setPan()
+    viewerRef.current?.setSnapIndicator(null)
+    viewerRef.current?.clearMeasurePreview()
+    setMeasurePoints([])
   }
 
   function activateZoom() {
     setActiveMode('zoom')
     viewerRef.current?.setZoom()
+    viewerRef.current?.setSnapIndicator(null)
+    viewerRef.current?.clearMeasurePreview()
+    setMeasurePoints([])
   }
 
   function activateMeasure() {
     setActiveMode('measure')
     setMeasurePoints([])
+    viewerRef.current?.setMeasurementUnit(cadUnit)
   }
 
   function activateInspect() {
     setActiveMode('inspect')
     setShowEntityDrawer(true)
     setShowLayersDrawer(false)
+    viewerRef.current?.setSnapIndicator(null)
+    viewerRef.current?.clearMeasurePreview()
+    setMeasurePoints([])
   }
 
-  // Captura movimento do mouse para preview da medição
+  // Captura movimento do mouse para preview da medição e snap magnético
   const handleCanvasMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
     if (activeMode === 'measure' && viewerRef.current) {
       const rect = e.currentTarget.getBoundingClientRect()
       const screenX = e.clientX - rect.left
       const screenY = e.clientY - rect.top
       const world = viewerRef.current.screenToWorld(screenX, screenY)
-      setCurrentMouseWorld(world)
-      triggerRedraw()
+
+      const snap = viewerRef.current.getSnapPoint(screenX, screenY, world.x, world.y)
+      setIsSnappedHover(snap.isSnapped)
+      viewerRef.current.setSnapIndicator(snap.point, snap.isSnapped, snap.snapType)
+
+      if (measurePoints.length > 0) {
+        viewerRef.current.updateMeasurePreview(measurePoints[0], snap.point)
+      }
     }
   }
 
@@ -298,15 +280,15 @@ export default function CADPage() {
     <div className="h-full flex flex-col gap-3">
       <PageHeader
         title="Visualizador CAD Avançado (DWG / DXF)"
-        subtitle="Visualização técnica com gerenciador de layers, layouts de prancha, cotas e criação de issues"
+        subtitle="Visualização com aceleração Three.js, snap magnético em tempo real, gerenciador de layers e issues"
         actions={
           <div className="flex items-center gap-2">
             <button
               onClick={handleStartCreateIssue}
               disabled={!loadedFile || isLoading}
-              className="flex items-center gap-2 px-3.5 py-2 text-xs font-bold rounded-xl transition-all shadow-md active:scale-95 text-white disabled:opacity-40 disabled:cursor-not-allowed"
+              className="flex items-center gap-2 px-3.5 py-2 text-xs font-bold rounded-xl transition-all shadow-md active:scale-95 text-white disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
               style={{ background: 'linear-gradient(135deg, var(--orange), #c2410c)' }}
-              title="Capturar frame da prancha e abrir formulário de Issue"
+              title="Capturar frame da prancha com anotações e abrir formulário de Issue"
             >
               <MessageSquarePlus size={15} />
               CRIAR ISSUE CAD
@@ -377,10 +359,10 @@ export default function CADPage() {
                 ? 'bg-orange-500 text-white border-orange-400 shadow-md shadow-orange-500/20'
                 : 'bg-slate-800/80 hover:bg-slate-700 text-slate-300 border-slate-700'
             }`}
-            title="Modo Medir Cota 2D"
+            title="Modo Medir Cota 2D com Snap Magnético"
           >
             <Ruler size={14} />
-            <span>Medir Cota</span>
+            <span>Medir Cota (Snap)</span>
           </button>
 
           {/* Inspecionar Entidade */}
@@ -419,14 +401,14 @@ export default function CADPage() {
           {/* Zoom Steps */}
           <button
             onClick={() => viewerRef.current?.zoomIn()}
-            className="p-1.5 rounded-xl bg-slate-800/80 hover:bg-slate-700 text-slate-300 border border-slate-700 transition-colors"
+            className="p-1.5 rounded-xl bg-slate-800/80 hover:bg-slate-700 text-slate-300 border border-slate-700 transition-colors cursor-pointer"
             title="Aproximar Zoom"
           >
             <ZoomIn size={14} />
           </button>
           <button
             onClick={() => viewerRef.current?.zoomOut()}
-            className="p-1.5 rounded-xl bg-slate-800/80 hover:bg-slate-700 text-slate-300 border border-slate-700 transition-colors"
+            className="p-1.5 rounded-xl bg-slate-800/80 hover:bg-slate-700 text-slate-300 border border-slate-700 transition-colors cursor-pointer"
             title="Afastar Zoom"
           >
             <ZoomOut size={14} />
@@ -436,7 +418,7 @@ export default function CADPage() {
               viewerRef.current?.zoomToFit()
               setActiveMode('pan')
             }}
-            className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-slate-800/80 hover:bg-slate-700 text-slate-300 border border-slate-700 transition-colors text-xs font-medium"
+            className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-slate-800/80 hover:bg-slate-700 text-slate-300 border border-slate-700 transition-colors text-xs font-medium cursor-pointer"
             title="Enquadrar desenho no centro"
           >
             <Maximize2 size={14} />
@@ -484,14 +466,19 @@ export default function CADPage() {
                 <span className="text-slate-300">
                   {measurePoints.length === 0 ? 'Clique no 1º ponto' : 'Clique no 2º ponto para fechar'}
                 </span>
+                {isSnappedHover && (
+                  <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded bg-cyan-500/20 text-cyan-300 font-bold border border-cyan-500/40 flex items-center gap-1">
+                    <Magnet size={11} /> Snap Ativo
+                  </span>
+                )}
               </div>
 
               {/* Seletor de Unidade */}
               <div className="flex items-center gap-1 bg-slate-950/80 px-2 py-1 rounded-xl border border-slate-800">
                 <span className="text-[10px] text-slate-400 font-semibold uppercase">Escala:</span>
                 <button
-                  onClick={() => { setCadUnit('cm'); triggerRedraw() }}
-                  className={`px-2 py-0.5 rounded-lg text-[11px] font-bold transition-colors ${
+                  onClick={() => handleUnitChange('cm')}
+                  className={`px-2 py-0.5 rounded-lg text-[11px] font-bold transition-colors cursor-pointer ${
                     cadUnit === 'cm' ? 'bg-orange-500 text-white shadow-sm' : 'text-slate-400 hover:text-white'
                   }`}
                   title="1 unidade CAD = 1 centímetro (padrão Brasil)"
@@ -499,8 +486,8 @@ export default function CADPage() {
                   cm (Centímetros)
                 </button>
                 <button
-                  onClick={() => { setCadUnit('m'); triggerRedraw() }}
-                  className={`px-2 py-0.5 rounded-lg text-[11px] font-bold transition-colors ${
+                  onClick={() => handleUnitChange('m')}
+                  className={`px-2 py-0.5 rounded-lg text-[11px] font-bold transition-colors cursor-pointer ${
                     cadUnit === 'm' ? 'bg-orange-500 text-white shadow-sm' : 'text-slate-400 hover:text-white'
                   }`}
                   title="1 unidade CAD = 1 metro"
@@ -508,8 +495,8 @@ export default function CADPage() {
                   m (Metros)
                 </button>
                 <button
-                  onClick={() => { setCadUnit('mm'); triggerRedraw() }}
-                  className={`px-2 py-0.5 rounded-lg text-[11px] font-bold transition-colors ${
+                  onClick={() => handleUnitChange('mm')}
+                  className={`px-2 py-0.5 rounded-lg text-[11px] font-bold transition-colors cursor-pointer ${
                     cadUnit === 'mm' ? 'bg-orange-500 text-white shadow-sm' : 'text-slate-400 hover:text-white'
                   }`}
                   title="1 unidade CAD = 1 milímetro"
@@ -529,7 +516,7 @@ export default function CADPage() {
                   <span>#{idx + 1}: {formatCADDistance(m.rawDistance, cadUnit)}</span>
                   <button
                     onClick={() => handleDeleteCota(m.id)}
-                    className="p-0.5 rounded hover:bg-red-500/20 text-slate-400 hover:text-red-400 transition-colors"
+                    className="p-0.5 rounded hover:bg-red-500/20 text-slate-400 hover:text-red-400 transition-colors cursor-pointer"
                     title="Apagar esta cota"
                   >
                     <X size={12} />
@@ -540,149 +527,13 @@ export default function CADPage() {
               {activeMeasurements.length > 0 && (
                 <button
                   onClick={handleClearAllCotas}
-                  className="text-xs text-red-400 hover:text-red-300 font-semibold flex items-center gap-1 px-2 py-1 rounded-lg hover:bg-red-500/10 transition-colors"
+                  className="text-xs text-red-400 hover:text-red-300 font-semibold flex items-center gap-1 px-2 py-1 rounded-lg hover:bg-red-500/10 transition-colors cursor-pointer"
                 >
                   <Trash2 size={12} /> Limpar Todas
                 </button>
               )}
             </div>
           </div>
-        )}
-
-        {/* SVG Overlay para desenho das linhas de cota 2D */}
-        {viewerRef.current && (activeMeasurements.length > 0 || measurePoints.length > 0) && (
-          <svg
-            id="cad-measure-svg"
-            ref={svgOverlayRef}
-            className="absolute inset-0 pointer-events-none z-20 w-full h-full"
-          >
-            <defs>
-              <marker id="cad-arrow" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-                <path d="M 0 0 L 10 5 L 0 10 z" fill="#f97316" />
-              </marker>
-            </defs>
-
-            {/* Medições confirmadas */}
-            {activeMeasurements.map((m, idx) => {
-              const p1Screen = viewerRef.current?.worldToScreen(m.startWorld.x, m.startWorld.y)
-              const p2Screen = viewerRef.current?.worldToScreen(m.endWorld.x, m.endWorld.y)
-              if (!p1Screen || !p2Screen) return null
-
-              const midX = (p1Screen.x + p2Screen.x) / 2
-              const midY = (p1Screen.y + p2Screen.y) / 2
-              const label = formatCADDistance(m.rawDistance, cadUnit)
-
-              return (
-                <g key={m.id} className="pointer-events-auto">
-                  {/* Linha da cota */}
-                  <line
-                    x1={p1Screen.x}
-                    y1={p1Screen.y}
-                    x2={p2Screen.x}
-                    y2={p2Screen.y}
-                    stroke="#f97316"
-                    strokeWidth="2.5"
-                    markerStart="url(#cad-arrow)"
-                    markerEnd="url(#cad-arrow)"
-                  />
-                  {/* Marcadores pontuais */}
-                  <circle cx={p1Screen.x} cy={p1Screen.y} r="4.5" fill="#22c55e" stroke="#ffffff" strokeWidth="1.5" />
-                  <circle cx={p2Screen.x} cy={p2Screen.y} r="4.5" fill="#22c55e" stroke="#ffffff" strokeWidth="1.5" />
-
-                  {/* Etiqueta da distância com botão de exclusão */}
-                  <g transform={`translate(${midX}, ${midY - 14})`}>
-                    <rect
-                      x="-48"
-                      y="-12"
-                      width="96"
-                      height="24"
-                      rx="8"
-                      fill="#0f1923"
-                      stroke="#f97316"
-                      strokeWidth="1.5"
-                      className="shadow-lg"
-                    />
-                    <text
-                      x="-8"
-                      y="4"
-                      textAnchor="middle"
-                      fill="#ffffff"
-                      fontSize="11"
-                      fontWeight="bold"
-                      fontFamily="monospace"
-                    >
-                      {label}
-                    </text>
-                    {/* Botão X para apagar esta cota diretamente no desenho */}
-                    <g
-                      transform="translate(36, 0)"
-                      className="cursor-pointer"
-                      onClick={() => handleDeleteCota(m.id)}
-                    >
-                      <circle cx="0" cy="0" r="7" fill="#ef4444" opacity="0.9" />
-                      <line x1="-3" y1="-3" x2="3" y2="3" stroke="#ffffff" strokeWidth="1.5" />
-                      <line x1="3" y1="-3" x2="-3" y2="3" stroke="#ffffff" strokeWidth="1.5" />
-                    </g>
-                  </g>
-                </g>
-              )
-            })}
-
-            {/* Preview dinâmico do 1º ponto até o cursor atual */}
-            {measurePoints.length > 0 && currentMouseWorld && (
-              (() => {
-                const p1Screen = viewerRef.current?.worldToScreen(measurePoints[0].x, measurePoints[0].y)
-                const p2Screen = viewerRef.current?.worldToScreen(currentMouseWorld.x, currentMouseWorld.y)
-                if (!p1Screen || !p2Screen) return null
-
-                const dx = currentMouseWorld.x - measurePoints[0].x
-                const dy = currentMouseWorld.y - measurePoints[0].y
-                const rawDist = Math.hypot(dx, dy)
-                const midX = (p1Screen.x + p2Screen.x) / 2
-                const midY = (p1Screen.y + p2Screen.y) / 2
-                const label = formatCADDistance(rawDist, cadUnit)
-
-                return (
-                  <g>
-                    <line
-                      x1={p1Screen.x}
-                      y1={p1Screen.y}
-                      x2={p2Screen.x}
-                      y2={p2Screen.y}
-                      stroke="#f97316"
-                      strokeWidth="2"
-                      strokeDasharray="4 4"
-                    />
-                    <circle cx={p1Screen.x} cy={p1Screen.y} r="4" fill="#22c55e" stroke="#ffffff" strokeWidth="1.5" />
-                    <circle cx={p2Screen.x} cy={p2Screen.y} r="4" fill="#f97316" stroke="#ffffff" strokeWidth="1.5" />
-                    <g transform={`translate(${midX}, ${midY - 14})`}>
-                      <rect
-                        x="-48"
-                        y="-12"
-                        width="96"
-                        height="24"
-                        rx="8"
-                        fill="#0f1923"
-                        stroke="#f97316"
-                        strokeWidth="1.5"
-                      />
-                      <text
-                        x="0"
-                        y="4"
-                        textAnchor="middle"
-                        fill="#ffffff"
-                        fontSize="11"
-                        fontWeight="bold"
-                        fontFamily="monospace"
-                      >
-                        {label}
-                      </text>
-                    </g>
-                  </g>
-                )
-              })()
-            )}
-          </svg>
         )}
 
         {/* Placeholder quando nenhum arquivo está aberto */}
