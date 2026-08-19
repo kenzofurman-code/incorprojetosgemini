@@ -7,6 +7,7 @@
  *  - Caminho Crítico (PERT / CPM) e Baseline
  *  - Vínculo com Entregáveis de Projetos
  *  - Acompanhamento de Protocolos em Órgãos Públicos
+ *  - Campos Customizados e Modal Estilo Pipefy para Kanban
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
@@ -25,10 +26,60 @@ export type TaskStatus =
   | 'concluido'
   | 'bloqueado'
 
+export type CustomFieldType =
+  | 'text'
+  | 'textarea'
+  | 'number'
+  | 'currency'
+  | 'date'
+  | 'select'
+  | 'checkbox'
+  | 'user'
+
+export interface CustomFieldDefinition {
+  id: string
+  label: string
+  type: CustomFieldType
+  options?: string[] // Para selects
+  bucket?: TaskStatus | 'global' // 'global' (formulário padrão) ou específico de uma fase/bucket
+  placeholder?: string
+  required?: boolean
+}
+
+export interface TaskChecklistItem {
+  id: string
+  title: string
+  completed: boolean
+}
+
+export interface TaskComment {
+  id: string
+  author: string
+  avatar?: string
+  text: string
+  createdAt: string
+}
+
+export interface TaskAttachment {
+  id: string
+  name: string
+  size?: string
+  url?: string
+  uploadedAt: string
+}
+
+export interface TaskPhaseChangeLog {
+  fromStatus: TaskStatus
+  toStatus: TaskStatus
+  changedAt: string
+  changedBy?: string
+}
+
 export interface ScheduleTask {
   id: string
   wbs: string // ex: "1", "1.1", "1.2.1"
   name: string
+  description?: string
   startDate: string // ISO date YYYY-MM-DD
   endDate: string // ISO date YYYY-MM-DD
   durationDays: number // Duração em dias úteis
@@ -53,6 +104,13 @@ export interface ScheduleTask {
   // Vínculo com Entregáveis de Projetos
   deliverableIds?: string[] // IDs de pranchas ou códigos de disciplina vinculados
   suggestedProgress?: number // % sugerido pelo motor de entregáveis
+
+  // Campos Customizados Estilo Pipefy
+  customFields?: Record<string, any>
+  checklist?: TaskChecklistItem[]
+  comments?: TaskComment[]
+  attachments?: TaskAttachment[]
+  phaseHistory?: TaskPhaseChangeLog[]
 
   // CPM / PERT (Cálculo de Caminho Crítico)
   isMilestone?: boolean

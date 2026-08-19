@@ -1,9 +1,12 @@
 /**
  * KanbanBoard.tsx
  * ─────────────────────────────────────────────────────────────────────────────
- * Quadro Kanban Sincronizado com a base de dados da EAP/Gantt.
- * Permite movimentar tarefas entre as colunas de status (A Fazer, Em Andamento,
- * Em Revisão, Concluído, Bloqueado) com atualização instantânea no Gantt.
+ * Quadro Kanban Sincronizado com a base de dados da EAP/Gantt e Diagrama de Rede.
+ * Permite:
+ *  - Movimentar tarefas entre as colunas de status com Drag & Drop
+ *  - Abrir o Card Completo Estilo Pipefy ao clicar
+ *  - Editar campos padrão globais e campos específicos por bucket
+ *  - Sincronização em tempo real com todo o cronograma
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
@@ -18,10 +21,14 @@ import {
   User,
   Calendar,
   FileCheck,
-  Plus,
+  CheckSquare,
+  Sliders,
+  Sparkles,
 } from 'lucide-react'
 import type { ScheduleTask, TaskStatus } from '../../../types/cronograma'
 import { formatDateBR } from '../../../lib/businessCalendar'
+import { recalculateSchedule } from '../../../lib/dependencySchedule'
+import PipefyCardModal from './PipefyCardModal'
 
 interface KanbanBoardProps {
   tasks: ScheduleTask[]
@@ -88,10 +95,10 @@ export default function KanbanBoard({
 }: KanbanBoardProps) {
   const [draggedTaskId, setDraggedTaskId] = useState<string | null>(null)
   const [filterResponsible, setFilterResponsible] = useState<string>('todos')
+  const [selectedTaskForModal, setSelectedTaskForModal] = useState<ScheduleTask | null>(null)
 
-  // Filtra tarefas (somente tarefas folha, grupos ficam fora do kanban ou como filtro)
+  // Filtra tarefas (somente tarefas folha)
   const leafTasks = tasks.filter(t => !t.isGroup)
-
   const responsibles = Array.from(new Set(leafTasks.map(t => t.responsible).filter(Boolean)))
 
   const filteredTasks = leafTasks.filter(t => {
@@ -126,8 +133,18 @@ export default function KanbanBoard({
       return t
     })
 
-    onTasksChange(nextList)
+    onTasksChange(recalculateSchedule(nextList))
     setDraggedTaskId(null)
+  }
+
+  const handleCardClick = (task: ScheduleTask) => {
+    setSelectedTaskForModal(task)
+  }
+
+  const handleSaveModalTask = (updatedTask: ScheduleTask) => {
+    const nextList = tasks.map(t => (t.id === updatedTask.id ? updatedTask : t))
+    onTasksChange(recalculateSchedule(nextList))
+    setSelectedTaskForModal(null)
   }
 
   return (
@@ -157,7 +174,6 @@ export default function KanbanBoard({
       <div className="flex-1 grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-3 overflow-x-auto min-h-[500px]">
         {COLUMNS.map(col => {
           const colTasks = filteredTasks.filter(t => t.status === col.status)
-          const Icon = col.icon
 
           return (
             <div
@@ -191,19 +207,23 @@ export default function KanbanBoard({
               <div className="flex-1 flex flex-col gap-2.5 overflow-y-auto pr-1">
                 {colTasks.map(task => {
                   const isCritical = Boolean(task.critical)
+                  const completedChecks = task.checklist?.filter(c => c.completed).length || 0
+                  const totalChecks = task.checklist?.length || 0
+                  const customFieldCount = Object.keys(task.customFields || {}).length
 
                   return (
                     <div
                       key={task.id}
                       draggable
                       onDragStart={e => handleDragStart(e, task.id)}
-                      className={`p-3 rounded-xl border bg-slate-900/90 shadow-md hover:shadow-xl transition-all cursor-grab active:cursor-grabbing group hover:border-orange-500/50 ${
-                        isCritical ? 'border-red-500/40' : 'border-slate-800'
+                      onClick={() => handleCardClick(task)}
+                      className={`p-3.5 rounded-2xl border bg-slate-900/95 shadow-md hover:shadow-2xl transition-all cursor-pointer group hover:border-orange-500/60 active:scale-[0.99] ${
+                        isCritical ? 'border-red-500/50 ring-1 ring-red-500/30' : 'border-slate-800'
                       }`}
                     >
-                      {/* Topo do Card: WBS e Caminho Crítico */}
-                      <div className="flex items-center justify-between mb-1.5">
-                        <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-800 text-slate-400">
+                      {/* Topo do Card: WBS e Badges */}
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 font-bold border border-slate-700/80">
                           {task.wbs}
                         </span>
 
@@ -215,29 +235,28 @@ export default function KanbanBoard({
                           )}
 
                           {task.deliverableIds && task.deliverableIds.length > 0 && (
-                            <button
-                              onClick={() => onOpenDeliverablesModal?.(task)}
-                              className="p-1 rounded bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30 transition-colors"
-                              title="Ver entregáveis vinculados"
+                            <span
+                              className="p-1 rounded bg-emerald-500/20 text-emerald-400 text-[10px] font-bold flex items-center gap-0.5"
+                              title={`${task.deliverableIds.length} prancha(s) vinculada(s)`}
                             >
-                              <FileCheck size={12} />
-                            </button>
+                              <FileCheck size={11} /> {task.deliverableIds.length}
+                            </span>
                           )}
                         </div>
                       </div>
 
-                      {/* Nome da Tarefa */}
-                      <div className="text-xs font-semibold text-slate-100 mb-2 line-clamp-2">
+                      {/* Nome da Atividade */}
+                      <div className="text-xs font-bold text-slate-100 mb-2 line-clamp-2 group-hover:text-orange-400 transition-colors">
                         {task.name}
                       </div>
 
                       {/* Tags */}
                       {task.tags && task.tags.length > 0 && (
                         <div className="flex items-center gap-1 flex-wrap mb-2">
-                          {task.tags.map(tag => (
+                          {task.tags.map((tag, i) => (
                             <span
-                              key={tag}
-                              className="text-[9px] px-1.5 py-0.5 rounded-md bg-slate-800 text-slate-400"
+                              key={i}
+                              className="text-[9px] px-1.5 py-0.5 rounded-md bg-slate-800 text-slate-300 border border-slate-700/60"
                             >
                               {tag}
                             </span>
@@ -245,8 +264,27 @@ export default function KanbanBoard({
                         </div>
                       )}
 
+                      {/* Checklist and Custom Fields Indicators */}
+                      {(totalChecks > 0 || customFieldCount > 0) && (
+                        <div className="flex items-center gap-2 mb-2 text-[10px] text-slate-400">
+                          {totalChecks > 0 && (
+                            <span className="flex items-center gap-1">
+                              <CheckSquare size={11} className={completedChecks === totalChecks ? 'text-emerald-400' : 'text-slate-500'} />
+                              <span>{completedChecks}/{totalChecks}</span>
+                            </span>
+                          )}
+
+                          {customFieldCount > 0 && (
+                            <span className="flex items-center gap-1 text-slate-500">
+                              <Sliders size={11} />
+                              <span>{customFieldCount} campos</span>
+                            </span>
+                          )}
+                        </div>
+                      )}
+
                       {/* Barra de Progresso */}
-                      <div className="mb-2">
+                      <div className="mb-2.5">
                         <div className="flex items-center justify-between text-[10px] text-slate-400 mb-1">
                           <span>Progresso</span>
                           <span className="font-mono font-bold text-white">{task.progress}%</span>
@@ -262,15 +300,15 @@ export default function KanbanBoard({
                         </div>
                       </div>
 
-                      {/* Rodapé do Card: Datas e Responsável */}
-                      <div className="flex items-center justify-between text-[11px] text-slate-400 pt-2 border-t border-slate-800/60">
+                      {/* Rodapé do Card: Responsável e Vencimento */}
+                      <div className="flex items-center justify-between text-[11px] text-slate-400 pt-2 border-t border-slate-800/80">
                         <span className="flex items-center gap-1 truncate max-w-[110px]" title={task.responsible}>
                           <User size={12} className="text-slate-500" />
                           <span className="truncate">{task.responsible}</span>
                         </span>
 
-                        <span className="flex items-center gap-1 font-mono text-[10px]">
-                          <Calendar size={11} className="text-slate-500" />
+                        <span className="flex items-center gap-1 font-mono text-[10px] text-slate-300">
+                          <Calendar size={11} className="text-orange-400" />
                           {formatDateBR(task.endDate)}
                         </span>
                       </div>
@@ -279,7 +317,7 @@ export default function KanbanBoard({
                 })}
 
                 {colTasks.length === 0 && (
-                  <div className="flex-1 flex flex-col items-center justify-center p-4 border border-dashed border-slate-800 rounded-xl text-center text-slate-600 text-xs">
+                  <div className="flex-1 flex flex-col items-center justify-center p-4 border border-dashed border-slate-800 rounded-2xl text-center text-slate-600 text-xs">
                     Nenhuma tarefa aqui
                   </div>
                 )}
@@ -288,6 +326,17 @@ export default function KanbanBoard({
           )
         })}
       </div>
+
+      {/* ── Modal do Card no Padrão Pipefy ───────────────────────────────── */}
+      {selectedTaskForModal && (
+        <PipefyCardModal
+          task={selectedTaskForModal}
+          allTasks={tasks}
+          onSave={handleSaveModalTask}
+          onClose={() => setSelectedTaskForModal(null)}
+          onOpenDeliverablesModal={onOpenDeliverablesModal}
+        />
+      )}
     </div>
   )
 }

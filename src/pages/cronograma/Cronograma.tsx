@@ -4,7 +4,7 @@
  * Página Principal do Módulo de Cronograma Avançado do IncorProjetos.
  * Integra em uma base de dados sincronizada:
  *  1. Gráfico de Gantt Interativo (100% Nativo em React/SVG com drag e resize)
- *  2. Quadro Kanban com Buckets de Status e Drag & Drop
+ *  2. Quadro Kanban Estilo Pipefy com Campos Customizados por Fase
  *  3. Diagrama de Rede PERT / CPM com Caminho Crítico
  *  4. Acompanhamento de Protocolos em Órgãos Públicos
  *  5. Vínculo de Entregáveis e Cálculo Inteligente de % Realizado
@@ -20,9 +20,6 @@ import {
   Building2,
   Sparkles,
   Plus,
-  Upload,
-  CheckCircle2,
-  FileSpreadsheet,
 } from 'lucide-react'
 import { PageHeader } from '../../components/ui'
 import { useApp } from '../../context/AppContext'
@@ -34,6 +31,7 @@ import KanbanBoard from '../../components/cronograma/Kanban/KanbanBoard'
 import NetworkDiagram from '../../components/cronograma/Network/NetworkDiagram'
 import ProtocolosTracker from '../../components/cronograma/Protocolos/ProtocolosTracker'
 import TaskDeliverablesModal from '../../components/cronograma/DeliverablesLink/TaskDeliverablesModal'
+import PipefyCardModal from '../../components/cronograma/Kanban/PipefyCardModal'
 
 export default function Cronograma() {
   const { currentProject } = useApp()
@@ -42,6 +40,7 @@ export default function Cronograma() {
   const [tasks, setTasks] = useState<ScheduleTask[]>([])
   const [protocolos, setProtocolos] = useState<ProtocoloItem[]>(PROTOCOLOS_TEMPLATE)
   const [selectedTaskForDeliverables, setSelectedTaskForDeliverables] = useState<ScheduleTask | null>(null)
+  const [selectedTaskForPipefyModal, setSelectedTaskForPipefyModal] = useState<ScheduleTask | null>(null)
 
   // Local storage persistence por projeto
   const storageKeyTasks = `incor_cronograma_tasks_${currentProject.id}`
@@ -137,7 +136,7 @@ export default function Cronograma() {
                 }`}
               >
                 <Kanban size={14} />
-                <span>Kanban</span>
+                <span>Kanban (Pipefy)</span>
               </button>
 
               <button
@@ -215,7 +214,7 @@ export default function Cronograma() {
               />
             )}
 
-            {/* View 2: Kanban Board */}
+            {/* View 2: Kanban Board (Pipefy Style) */}
             {viewMode === 'kanban' && (
               <KanbanBoard
                 tasks={tasks}
@@ -228,7 +227,7 @@ export default function Cronograma() {
             {viewMode === 'network' && (
               <NetworkDiagram
                 tasks={tasks}
-                onSelectTask={task => setSelectedTaskForDeliverables(task)}
+                onSelectTask={task => setSelectedTaskForPipefyModal(task)}
               />
             )}
 
@@ -242,6 +241,21 @@ export default function Cronograma() {
           </>
         )}
       </div>
+
+      {/* Modal Pipefy de Detalhes da Tarefa (quando acionado do Gantt ou Rede) */}
+      {selectedTaskForPipefyModal && (
+        <PipefyCardModal
+          task={selectedTaskForPipefyModal}
+          allTasks={tasks}
+          onSave={updatedTask => {
+            const nextList = tasks.map(t => (t.id === updatedTask.id ? updatedTask : t))
+            handleTasksChange(recalculateSchedule(nextList))
+            setSelectedTaskForPipefyModal(null)
+          }}
+          onClose={() => setSelectedTaskForPipefyModal(null)}
+          onOpenDeliverablesModal={task => setSelectedTaskForDeliverables(task)}
+        />
+      )}
 
       {/* Modal de Vínculo de Entregáveis de Projetos */}
       {selectedTaskForDeliverables && (
