@@ -14,14 +14,16 @@ import {
   ArrowUpDown,
   ArrowUp,
   ArrowDown,
+  FolderGit2,
 } from 'lucide-react'
 import type { ScheduleTask, TaskPriority, TaskStatus } from '../../../types/cronograma'
 import { format, parseISO, isValid } from 'date-fns'
 import { ptBR } from 'date-fns/locale'
 
 interface TableSectionProps {
-  sectionId: string
+  tableId: string
   title: string
+  listName?: string
   tags?: string[]
   tasks: ScheduleTask[]
   visibleColumns: string[]
@@ -29,8 +31,9 @@ interface TableSectionProps {
   sortDirection?: 'asc' | 'desc'
   onSort: (columnKey: string) => void
   onUpdateTask: (taskId: string, updates: Partial<ScheduleTask>) => void
-  onAddTaskToSection: (sectionTag?: string, sectionStatus?: TaskStatus, sectionResp?: string) => void
+  onAddTaskToSection: (sectionTag?: string, sectionListName?: string) => void
   onDeleteTask: (taskId: string) => void
+  onDeleteTable?: (tableId: string) => void
   onOpenTaskDetails: (task: ScheduleTask) => void
   onOpenColumnSelector: () => void
   allAvailableResponsibles: string[]
@@ -55,8 +58,9 @@ const TAG_COLORS: Record<string, string> = {
 }
 
 export default function TableSection({
-  sectionId,
+  tableId,
   title,
+  listName,
   tags = [],
   tasks,
   visibleColumns,
@@ -66,26 +70,15 @@ export default function TableSection({
   onUpdateTask,
   onAddTaskToSection,
   onDeleteTask,
+  onDeleteTable,
   onOpenTaskDetails,
   onOpenColumnSelector,
   allAvailableResponsibles,
   allAvailableTags,
 }: TableSectionProps) {
   const [collapsed, setCollapsed] = useState(false)
-  const [editingTaskId, setEditingTaskId] = useState<string | null>(null)
   const [newTaskName, setNewTaskName] = useState('')
   const [isAddingInline, setIsAddingInline] = useState(false)
-
-  const formatDateLabel = (dateStr?: string) => {
-    if (!dateStr) return '-'
-    try {
-      const d = parseISO(dateStr)
-      if (!isValid(d)) return dateStr
-      return format(d, 'd/M/yy', { locale: ptBR })
-    } catch {
-      return dateStr
-    }
-  }
 
   const handleToggleComplete = (task: ScheduleTask) => {
     const isDone = task.status === 'concluido'
@@ -101,17 +94,15 @@ export default function TableSection({
       return
     }
 
-    const today = new Date().toISOString().split('T')[0]
     const primaryTag = tags[0] || 'geral'
-
-    onAddTaskToSection(primaryTag)
+    onAddTaskToSection(primaryTag, listName)
     setNewTaskName('')
     setIsAddingInline(false)
   }
 
   return (
-    <div className="rounded-2xl border border-slate-800/80 bg-slate-950/60 overflow-hidden shadow-lg transition-all mb-4">
-      {/* ── Section Header ──────────────────────────────────────────────── */}
+    <div className="rounded-2xl border border-slate-800/80 bg-slate-950/60 overflow-hidden shadow-lg transition-all mb-5">
+      {/* ── Section / Table Header ───────────────────────────────────────── */}
       <div className="flex items-center justify-between px-4 py-2.5 bg-slate-900/90 border-b border-slate-800">
         <div className="flex items-center gap-2.5">
           <button
@@ -122,9 +113,17 @@ export default function TableSection({
             {collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
           </button>
 
-          {/* Tag Badges in Header */}
-          <div className="flex items-center gap-1.5 flex-wrap">
-            {tags.length > 0 ? (
+          {/* Table Title & Badges */}
+          <div className="flex items-center gap-2 flex-wrap">
+            {listName && (
+              <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-blue-500/20 text-blue-300 border border-blue-500/40">
+                {listName}
+              </span>
+            )}
+
+            <span className="font-bold text-white text-xs">{title}</span>
+
+            {tags.length > 0 &&
               tags.map(t => (
                 <span
                   key={t}
@@ -134,10 +133,7 @@ export default function TableSection({
                 >
                   {t}
                 </span>
-              ))
-            ) : (
-              <span className="font-bold text-white text-xs">{title}</span>
-            )}
+              ))}
 
             <span className="text-[11px] font-mono font-bold text-slate-400 ml-1">
               {tasks.length}
@@ -145,14 +141,28 @@ export default function TableSection({
           </div>
         </div>
 
-        <button
-          type="button"
-          onClick={() => onAddTaskToSection(tags[0])}
-          className="p-1 rounded-lg text-slate-400 hover:text-orange-400 hover:bg-slate-800 transition-colors cursor-pointer"
-          title="Adicionar tarefa neste grupo"
-        >
-          <Plus size={14} />
-        </button>
+        <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => onAddTaskToSection(tags[0], listName)}
+            className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold transition-colors cursor-pointer"
+            title="Adicionar tarefa nesta tabela"
+          >
+            <Plus size={13} className="text-orange-400" />
+            <span>Tarefa</span>
+          </button>
+
+          {onDeleteTable && (
+            <button
+              type="button"
+              onClick={() => onDeleteTable(tableId)}
+              className="p-1 rounded-lg text-slate-500 hover:text-red-400 hover:bg-slate-800 transition-colors cursor-pointer"
+              title="Remover esta tabela da visualização"
+            >
+              <Trash2 size={13} />
+            </button>
+          )}
+        </div>
       </div>
 
       {/* ── Table Rows Body ─────────────────────────────────────────────── */}
@@ -330,7 +340,7 @@ export default function TableSection({
                     {visibleColumns.includes('listName') && (
                       <td className="p-2">
                         <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-slate-800 text-slate-300 border border-slate-700">
-                          {task.listName || 'ALTA'}
+                          {task.listName || listName || 'ALTA'}
                         </span>
                       </td>
                     )}

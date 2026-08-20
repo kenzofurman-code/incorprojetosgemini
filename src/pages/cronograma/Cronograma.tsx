@@ -1,31 +1,38 @@
 ﻿/**
  * Cronograma.tsx
  * ─────────────────────────────────────────────────────────────────────────────
- * Página Principal do Módulo de Cronograma & Gestão de Atividades do IncorProjetos.
- * Integra em uma base de dados sincronizada:
- *  1. Visualização Multi-Tabelas Estilo ClickUp com Seleção de Colunas e Filtros
- *  2. Sistema de Múltiplas Visualizações no Topo (+ Visualização)
- *  3. Gráfico de Gantt Interativo (100% Nativo em React/SVG com drag e resize)
- *  4. Quadro Kanban Estilo Pipefy com Campos Customizados por Fase
- *  5. Diagrama de Rede PERT / CPM com Caminho Crítico
- *  6. Acompanhamento de Protocolos em Órgãos Públicos
+ * Página Principal do Módulo de Cronograma & Gestão de Projetos do IncorProjetos.
+ * Abas Principais:
+ *  1. ▦ Tabelas (com sub-visualizações estilo ClickUp, + Visualização, [x] e + Adicionar Tabela)
+ *  2. 📊 Gantt (Gráfico de Gantt Interativo Nativo)
+ *  3. ▦ Quadro / Kanban (Quadro Estilo Pipefy)
+ *  4. 🔀 Rede PERT (Diagrama de Rede e Caminho Crítico CPM)
+ *  5. 🏛️ Protocolos (Acompanhamento em Órgãos Públicos)
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
-import React, { useState, useEffect, useMemo } from 'react'
+import React, { useState, useEffect } from 'react'
+import {
+  Table as TableIcon,
+  Calendar,
+  Kanban,
+  GitMerge,
+  Building2,
+  Sparkles,
+  Plus,
+} from 'lucide-react'
+import { PageHeader } from '../../components/ui'
 import { useApp } from '../../context/AppContext'
 import type {
   ScheduleTask,
   ProtocoloItem,
-  CronogramaCustomView,
+  CronogramaMainTab,
 } from '../../types/cronograma'
 import { getIncorporacaoTemplate, PROTOCOLOS_TEMPLATE } from '../../data/incorporacaoTemplate'
 import { recalculateSchedule } from '../../lib/dependencySchedule'
 
-// Componentes das Visualizações
-import CronogramaViewsHeader from '../../components/cronograma/Views/CronogramaViewsHeader'
-import CreateCustomViewModal from '../../components/cronograma/Views/CreateCustomViewModal'
-import MultiTableView from '../../components/cronograma/Table/MultiTableView'
+// Componentes
+import TableViewsManager from '../../components/cronograma/Table/TableViewsManager'
 import GanttChart from '../../components/cronograma/Gantt/GanttChart'
 import KanbanBoard from '../../components/cronograma/Kanban/KanbanBoard'
 import NetworkDiagram from '../../components/cronograma/Network/NetworkDiagram'
@@ -33,124 +40,31 @@ import ProtocolosTracker from '../../components/cronograma/Protocolos/Protocolos
 import TaskDeliverablesModal from '../../components/cronograma/DeliverablesLink/TaskDeliverablesModal'
 import PipefyCardModal from '../../components/cronograma/Kanban/PipefyCardModal'
 
-const DEFAULT_VIEWS: CronogramaCustomView[] = [
-  {
-    id: 'view-equipe-int',
-    name: '👥 EQUIPE INT.',
-    format: 'tabela',
-    isDefault: true,
-    groupBy: 'tags',
-    visibleColumns: ['name', 'listName', 'startDate', 'endDate', 'tags', 'responsible', 'priority'],
-  },
-  {
-    id: 'view-isabele',
-    name: '👤 ISABELE',
-    format: 'tabela',
-    responsibleFilter: 'Isabele Caroline Tows',
-    isDefault: true,
-    groupBy: 'tags',
-    visibleColumns: ['name', 'listName', 'startDate', 'endDate', 'tags', 'responsible', 'priority'],
-  },
-  {
-    id: 'view-alana',
-    name: '👤 ALANA',
-    format: 'tabela',
-    responsibleFilter: 'Alana',
-    isDefault: true,
-    groupBy: 'tags',
-    visibleColumns: ['name', 'listName', 'startDate', 'endDate', 'tags', 'responsible', 'priority'],
-  },
-  {
-    id: 'view-bianca',
-    name: '👤 BIANCA',
-    format: 'tabela',
-    responsibleFilter: 'Bianca',
-    isDefault: true,
-    groupBy: 'tags',
-    visibleColumns: ['name', 'listName', 'startDate', 'endDate', 'tags', 'responsible', 'priority'],
-  },
-  {
-    id: 'view-thiago',
-    name: '👤 THIAGO',
-    format: 'tabela',
-    responsibleFilter: 'Thiago',
-    isDefault: true,
-    groupBy: 'tags',
-    visibleColumns: ['name', 'listName', 'startDate', 'endDate', 'tags', 'responsible', 'priority'],
-  },
-  {
-    id: 'view-viviane',
-    name: '👤 VIVIANE',
-    format: 'tabela',
-    responsibleFilter: 'Viviane',
-    isDefault: true,
-    groupBy: 'tags',
-    visibleColumns: ['name', 'listName', 'startDate', 'endDate', 'tags', 'responsible', 'priority'],
-  },
-  {
-    id: 'view-estrutura',
-    name: '📊 ESTRUTURA INT.',
-    format: 'tabela',
-    isDefault: true,
-    groupBy: 'listName',
-    visibleColumns: ['name', 'listName', 'startDate', 'endDate', 'tags', 'responsible', 'priority'],
-  },
-  {
-    id: 'view-gantt',
-    name: '📊 Gantt',
-    format: 'gantt',
-    isDefault: true,
-  },
-  {
-    id: 'view-kanban',
-    name: '▦ Quadro',
-    format: 'kanban',
-    isDefault: true,
-  },
-  {
-    id: 'view-network',
-    name: '🔀 Rede PERT',
-    format: 'network',
-    isDefault: true,
-  },
-  {
-    id: 'view-protocolos',
-    name: '🏛️ Protocolos',
-    format: 'protocolos',
-    isDefault: true,
-  },
+const MAIN_TABS: { id: CronogramaMainTab; label: string; icon: React.ComponentType<{ size?: number; className?: string }> }[] = [
+  { id: 'tabelas', label: 'Tabelas', icon: TableIcon },
+  { id: 'gantt', label: 'Gantt', icon: Calendar },
+  { id: 'kanban', label: 'Quadro', icon: Kanban },
+  { id: 'network', label: 'Rede PERT', icon: GitMerge },
+  { id: 'protocolos', label: 'Protocolos', icon: Building2 },
 ]
 
 export default function Cronograma() {
   const { currentProject } = useApp()
 
-  // 1. Estado das Tarefas e Protocolos
+  // 1. Aba Principal Ativa
+  const [activeMainTab, setActiveMainTab] = useState<CronogramaMainTab>('tabelas')
+
+  // 2. Estado das Tarefas e Protocolos
   const [tasks, setTasks] = useState<ScheduleTask[]>([])
   const [protocolos, setProtocolos] = useState<ProtocoloItem[]>(PROTOCOLOS_TEMPLATE)
 
-  // 2. Estado das Visualizações Customizadas
-  const [views, setViews] = useState<CronogramaCustomView[]>(() => {
-    const savedViews = localStorage.getItem(`incor_cronograma_views_${currentProject.id}`)
-    if (savedViews) {
-      try {
-        const parsed = JSON.parse(savedViews)
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed
-      } catch { /* silence */ }
-    }
-    return DEFAULT_VIEWS
-  })
-
-  const [activeViewId, setActiveViewId] = useState<string>('view-isabele')
-  const [isCreateViewModalOpen, setIsCreateViewModalOpen] = useState(false)
-
-  // Modais de Detalhes
+  // 3. Modais de Detalhes
   const [selectedTaskForDeliverables, setSelectedTaskForDeliverables] = useState<ScheduleTask | null>(null)
   const [selectedTaskForPipefyModal, setSelectedTaskForPipefyModal] = useState<ScheduleTask | null>(null)
 
   // Local storage persistence por projeto
   const storageKeyTasks = `incor_cronograma_tasks_${currentProject.id}`
   const storageKeyProt = `incor_cronograma_prot_${currentProject.id}`
-  const storageKeyViews = `incor_cronograma_views_${currentProject.id}`
 
   useEffect(() => {
     try {
@@ -165,7 +79,6 @@ export default function Cronograma() {
 
       // Se não há tarefas salvas, carrega o template padrão
       const templateTasks = getIncorporacaoTemplate('2026-05-04')
-      // Enriquece com dados de exemplo da Isabele / Equipe
       const enriched = templateTasks.map((t, idx) => ({
         ...t,
         listName: idx % 3 === 0 ? 'ALTA' : idx % 3 === 1 ? 'NATUNE' : 'PROJETOS',
@@ -213,93 +126,51 @@ export default function Cronograma() {
     handleTasksChange(enriched)
   }
 
-  // Visualização Ativa
-  const activeView = useMemo(() => {
-    return views.find(v => v.id === activeViewId) || views[0]
-  }, [views, activeViewId])
-
-  // Adicionar Nova Visualização
-  const handleAddCustomView = (newView: CronogramaCustomView) => {
-    const updated = [...views, newView]
-    setViews(updated)
-    setActiveViewId(newView.id)
-    try {
-      localStorage.setItem(storageKeyViews, JSON.stringify(updated))
-    } catch { /* silence */ }
-  }
-
-  // Excluir Visualização Customizada
-  const handleDeleteView = (viewId: string) => {
-    const updated = views.filter(v => v.id !== viewId)
-    setViews(updated)
-    if (activeViewId === viewId) {
-      setActiveViewId(updated[0]?.id || 'view-gantt')
-    }
-    try {
-      localStorage.setItem(storageKeyViews, JSON.stringify(updated))
-    } catch { /* silence */ }
-  }
-
-  // Lista de Responsáveis e Tags para o Modal de Criação de Visualizações
-  const availableResponsibles = useMemo(() => {
-    const set = new Set<string>()
-    tasks.forEach(t => {
-      if (t.responsible) set.add(t.responsible)
-    })
-    return Array.from(set)
-  }, [tasks])
-
-  const availableTags = useMemo(() => {
-    const set = new Set<string>()
-    tasks.forEach(t => {
-      t.tags?.forEach(tag => set.add(tag))
-    })
-    return Array.from(set)
-  }, [tasks])
-
   return (
-    <div className="flex flex-col min-h-screen bg-slate-950">
-      {/* ── 1. Top Header de Múltiplas Visualizações (ClickUp Style) ─────────── */}
-      <CronogramaViewsHeader
-        projectName={`EQUILÍBRIO - ${currentProject.name.toUpperCase()}`}
-        views={views}
-        activeViewId={activeViewId}
-        onSelectView={setActiveViewId}
-        onAddView={() => setIsCreateViewModalOpen(true)}
-        onDeleteView={handleDeleteView}
-      />
+    <div className="p-4 sm:p-6 space-y-5 max-w-[1700px] mx-auto min-h-screen">
+      {/* ── 1. Cabeçalho de Navegação Principal do Cronograma ──────────────── */}
+      <div className="flex items-center justify-between flex-wrap gap-3 pb-2 border-b border-slate-800">
+        <PageHeader
+          title={`Cronograma & Gestão • ${currentProject.name}`}
+          subtitle="Gerencie prazos, tabelas multi-projetos, dependências e protocolos de aprovação"
+        />
 
-      {/* ── 2. Conteúdo da Visualização Selecionada ─────────────────────────── */}
-      <div className="flex-1 p-3 sm:p-5">
-        {activeView.format === 'tabela' && (
-          <MultiTableView
+        {/* Abas Principais: Tabelas, Gantt, Quadro, Rede PERT, Protocolos */}
+        <div className="flex items-center gap-1 bg-slate-900/90 p-1 rounded-2xl border border-slate-800 shadow-md">
+          {MAIN_TABS.map(tab => {
+            const Icon = tab.icon
+            const isActive = activeMainTab === tab.id
+
+            return (
+              <button
+                key={tab.id}
+                onClick={() => setActiveMainTab(tab.id)}
+                className={`flex items-center gap-2 px-3.5 py-2 rounded-xl font-bold text-xs transition-all cursor-pointer ${
+                  isActive
+                    ? 'bg-orange-500 text-white shadow-md shadow-orange-500/20'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+                }`}
+              >
+                <Icon size={14} className={isActive ? 'text-white' : 'text-slate-400'} />
+                <span>{tab.label}</span>
+              </button>
+            )
+          })}
+        </div>
+      </div>
+
+      {/* ── 2. Conteúdo da Aba Principal Ativa ──────────────────────────────── */}
+      <div className="animate-in fade-in duration-150">
+        {activeMainTab === 'tabelas' && (
+          <TableViewsManager
             tasks={tasks}
-            view={activeView}
             onUpdateTasks={handleTasksChange}
             onOpenTaskDetails={setSelectedTaskForPipefyModal}
-            onAddTask={() => {
-              const today = new Date().toISOString().split('T')[0]
-              const newTask: ScheduleTask = {
-                id: `task-${Date.now()}`,
-                wbs: `${tasks.length + 1}`,
-                name: 'Nova Atividade',
-                startDate: today,
-                endDate: today,
-                durationDays: 1,
-                progress: 0,
-                status: 'nao_iniciado',
-                priority: 'normal',
-                responsible: activeView.responsibleFilter || 'Isabele Caroline Tows',
-                listName: 'ALTA',
-                tags: ['análise', 'equilíbrio'],
-                predecessors: [],
-              }
-              handleTasksChange([...tasks, newTask])
-            }}
+            projectId={currentProject.id}
           />
         )}
 
-        {activeView.format === 'gantt' && (
+        {activeMainTab === 'gantt' && (
           <GanttChart
             tasks={tasks}
             onTasksChange={handleTasksChange}
@@ -309,7 +180,7 @@ export default function Cronograma() {
           />
         )}
 
-        {activeView.format === 'kanban' && (
+        {activeMainTab === 'kanban' && (
           <KanbanBoard
             tasks={tasks}
             onTasksChange={handleTasksChange}
@@ -317,14 +188,14 @@ export default function Cronograma() {
           />
         )}
 
-        {activeView.format === 'network' && (
+        {activeMainTab === 'network' && (
           <NetworkDiagram
             tasks={tasks}
             onSelectTask={setSelectedTaskForPipefyModal}
           />
         )}
 
-        {activeView.format === 'protocolos' && (
+        {activeMainTab === 'protocolos' && (
           <ProtocolosTracker
             protocolos={protocolos}
             onProtocolosChange={handleProtocolosChange}
@@ -332,7 +203,7 @@ export default function Cronograma() {
         )}
       </div>
 
-      {/* ── 3. Modais de Detalhes e Criação de Visualizações ─────────────────── */}
+      {/* ── 3. Modais Globais ────────────────────────────────────────────────── */}
       {selectedTaskForDeliverables && (
         <TaskDeliverablesModal
           task={selectedTaskForDeliverables}
@@ -363,14 +234,6 @@ export default function Cronograma() {
           }}
         />
       )}
-
-      <CreateCustomViewModal
-        isOpen={isCreateViewModalOpen}
-        onClose={() => setIsCreateViewModalOpen(false)}
-        onSave={handleAddCustomView}
-        availableResponsibles={availableResponsibles}
-        availableTags={availableTags}
-      />
     </div>
   )
 }
