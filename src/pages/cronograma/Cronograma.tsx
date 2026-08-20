@@ -211,6 +211,7 @@ export default function Cronograma() {
                 onTasksChange={handleTasksChange}
                 onLoadTemplate={handleLoadTemplate}
                 onOpenDeliverablesModal={task => setSelectedTaskForDeliverables(task)}
+                onOpenPipefyModal={task => setSelectedTaskForPipefyModal(task)}
               />
             )}
 

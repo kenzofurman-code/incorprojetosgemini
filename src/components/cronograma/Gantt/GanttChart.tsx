@@ -2,8 +2,10 @@
  * GanttChart.tsx
  * ─────────────────────────────────────────────────────────────────────────────
  * Container Principal do Gráfico de Gantt Interativo (100% Nativo).
- * Sincroniza o scroll vertical entre a tabela EAP e a timeline de barras,
- * gerencia filtros e o recálculo topológico contínuo.
+ * Integra:
+ *  - Divisor horizontal arrastável (Splitter / Resizer) entre tabela e timeline
+ *  - Tabela EAP tabular limpa com reordenação livre de colunas por Drag & Drop
+ *  - Sincronização fluída de scroll vertical e persistência de layout
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
@@ -17,16 +19,30 @@ import {
 } from '../../../lib/businessCalendar'
 import { recalculateSchedule } from '../../../lib/dependencySchedule'
 import GanttHeader, { type GanttZoomLevel } from './GanttHeader'
-import GanttTable from './GanttTable'
+import GanttTable, { type GanttColumnId } from './GanttTable'
 import GanttTimeline from './GanttTimeline'
 import GanttDependencySvg from './GanttDependencySvg'
 import GanttToolbar from './GanttToolbar'
+
+const DEFAULT_COLUMNS_ORDER: GanttColumnId[] = [
+  'wbs',
+  'name',
+  'startDate',
+  'endDate',
+  'duration',
+  'predecessors',
+  'responsible',
+  'progress',
+  'status',
+  'actions',
+]
 
 interface GanttChartProps {
   tasks: ScheduleTask[]
   onTasksChange: (tasks: ScheduleTask[]) => void
   onLoadTemplate: () => void
   onOpenDeliverablesModal?: (task: ScheduleTask) => void
+  onOpenPipefyModal?: (task: ScheduleTask) => void
 }
 
 export default function GanttChart({
@@ -34,13 +50,67 @@ export default function GanttChart({
   onTasksChange,
   onLoadTemplate,
   onOpenDeliverablesModal,
+  onOpenPipefyModal,
 }: GanttChartProps) {
   const [zoom, setZoom] = useState<GanttZoomLevel>(2)
   const [showCriticalOnly, setShowCriticalOnly] = useState(false)
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null)
 
+  // Largura da tabela da esquerda com persistência
+  const [tableWidth, setTableWidth] = useState<number>(() => {
+    const saved = localStorage.getItem('incor_gantt_table_width')
+    return saved ? Math.max(260, Math.min(1100, parseInt(saved, 10))) : 540
+  })
+  const [isDraggingSplitter, setIsDraggingSplitter] = useState(false)
+  const splitterDragRef = useRef<{ startX: number; startWidth: number } | null>(null)
+
+  // Ordem personalizada de colunas com persistência
+  const [columnsOrder, setColumnsOrder] = useState<GanttColumnId[]>(() => {
+    try {
+      const saved = localStorage.getItem('incor_gantt_cols_order')
+      if (saved) {
+        const parsed = JSON.parse(saved)
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed
+      }
+    } catch { /* silence */ }
+    return DEFAULT_COLUMNS_ORDER
+  })
+
   const tableScrollRef = useRef<HTMLDivElement>(null)
   const timelineScrollRef = useRef<HTMLDivElement>(null)
+
+  // ── Splitter Drag Handlers (Divisor arrastável) ───────────────────────────
+  const handleSplitterPointerDown = (e: React.PointerEvent) => {
+    e.preventDefault()
+    ;(e.target as HTMLElement).setPointerCapture(e.pointerId)
+    setIsDraggingSplitter(true)
+    splitterDragRef.current = { startX: e.clientX, startWidth: tableWidth }
+  }
+
+  const handleSplitterPointerMove = (e: React.PointerEvent) => {
+    if (!splitterDragRef.current) return
+    const deltaX = e.clientX - splitterDragRef.current.startX
+    const newWidth = Math.max(260, Math.min(1100, splitterDragRef.current.startWidth + deltaX))
+    setTableWidth(newWidth)
+  }
+
+  const handleSplitterPointerUp = (e: React.PointerEvent) => {
+    if (splitterDragRef.current) {
+      try {
+        ;(e.target as HTMLElement).releasePointerCapture(e.pointerId)
+      } catch { /* silence */ }
+      splitterDragRef.current = null
+      setIsDraggingSplitter(false)
+      localStorage.setItem('incor_gantt_table_width', String(tableWidth))
+    }
+  }
+
+  const handleColumnsOrderChange = (newOrder: GanttColumnId[]) => {
+    setColumnsOrder(newOrder)
+    try {
+      localStorage.setItem('incor_gantt_cols_order', JSON.stringify(newOrder))
+    } catch { /* silence */ }
+  }
 
   // Sincronização de scroll vertical entre tabela e timeline
   const handleTableScroll = (e: React.UIEvent<HTMLDivElement>) => {
@@ -187,7 +257,6 @@ export default function GanttChart({
       color: parentTask.color || '#3B82F6',
     }
 
-    // Insere logo após o grupo ou seus filhos
     const parentIndex = tasks.findIndex(t => t.id === parentTask.id)
     const nextList = [...tasks]
     nextList.splice(parentIndex + children.length + 1, 0, newSubtask)
@@ -265,7 +334,7 @@ export default function GanttChart({
   }
 
   return (
-    <div className="flex flex-col gap-3 h-full">
+    <div className="flex flex-col gap-3 h-full select-none">
       {/* Barra de Ferramentas */}
       <GanttToolbar
         zoom={zoom}
@@ -284,26 +353,44 @@ export default function GanttChart({
 
       {/* Área Principal do Gráfico de Gantt */}
       <div className="flex-1 flex rounded-2xl overflow-hidden border border-slate-800 bg-slate-900/60 shadow-2xl relative min-h-[500px]">
-        {/* Painel Esquerdo: Tabela EAP Inline */}
+        {/* Painel Esquerdo: Tabela EAP Tabular com Largura Redimensionável */}
         <div
           ref={tableScrollRef}
           onScroll={handleTableScroll}
-          className="overflow-y-auto overflow-x-hidden border-r border-slate-800"
-          style={{ height: 'calc(100vh - 280px)', minHeight: 460 }}
+          className="overflow-y-auto overflow-x-auto border-r border-slate-800 flex-shrink-0"
+          style={{
+            width: tableWidth,
+            height: 'calc(100vh - 280px)',
+            minHeight: 460,
+          }}
         >
           <GanttTable
             tasks={tasks}
             visibleTasks={visibleTasks}
+            columnsOrder={columnsOrder}
+            onColumnsOrderChange={handleColumnsOrderChange}
             onTaskUpdate={handleTaskUpdate}
             onTaskDelete={handleTaskDelete}
             onAddSubtask={handleAddSubtask}
             onToggleCollapse={handleToggleCollapse}
-            onIndentTask={() => {}}
-            onOutdentTask={() => {}}
             onOpenDeliverablesModal={onOpenDeliverablesModal}
+            onOpenPipefyModal={onOpenPipefyModal}
             selectedTaskId={selectedTaskId}
             onSelectTask={t => setSelectedTaskId(t.id)}
           />
+        </div>
+
+        {/* ── Divisor Arrastável (Splitter Bar) ────────────────────────────── */}
+        <div
+          onPointerDown={handleSplitterPointerDown}
+          onPointerMove={handleSplitterPointerMove}
+          onPointerUp={handleSplitterPointerUp}
+          className={`w-2 hover:w-2.5 bg-slate-800 hover:bg-orange-500 transition-colors cursor-col-resize z-30 flex items-center justify-center flex-shrink-0 ${
+            isDraggingSplitter ? 'bg-orange-500 ring-2 ring-orange-500/50' : ''
+          }`}
+          title="Clique e arraste para redimensionar a largura da tabela e do gráfico"
+        >
+          <div className="w-0.5 h-8 rounded-full bg-slate-600 group-hover:bg-white pointer-events-none" />
         </div>
 
         {/* Painel Direito: Timeline e SVG de Dependências */}
