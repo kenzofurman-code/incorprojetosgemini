@@ -15,13 +15,11 @@ import { formatCurrency } from '../../../utils/formatters'
 
 interface Tab03ProdutoProps {
   study: ViabilityStudyModel
-  isAdvancedMode: boolean
   onUpdateProduct: (product: ProductModel) => void
 }
 
 export default function Tab03Produto({
   study,
-  isAdvancedMode,
   onUpdateProduct,
 }: Tab03ProdutoProps) {
   const { product } = study

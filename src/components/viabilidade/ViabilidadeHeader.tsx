@@ -23,8 +23,6 @@ import type { ViabilityStudyModel } from '../../types/viabilidade'
 
 interface ViabilidadeHeaderProps {
   study: ViabilityStudyModel
-  isAdvancedMode: boolean
-  onToggleAdvancedMode: () => void
   onLoadBlossomFixture: () => void
   onLoadBlankTemplate: () => void
   onExportJSON: () => void
@@ -33,8 +31,6 @@ interface ViabilidadeHeaderProps {
 
 export default function ViabilidadeHeader({
   study,
-  isAdvancedMode,
-  onToggleAdvancedMode,
   onLoadBlossomFixture,
   onLoadBlankTemplate,
   onExportJSON,
@@ -82,22 +78,6 @@ export default function ViabilidadeHeader({
         >
           <Plus size={13} className="text-emerald-400" />
           <span>Novo em Branco</span>
-        </button>
-
-        <div className="h-4 w-px bg-slate-800 mx-1" />
-
-        {/* Toggle Modo Essencial / Avançado */}
-        <button
-          onClick={onToggleAdvancedMode}
-          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-semibold transition-all cursor-pointer ${
-            isAdvancedMode
-              ? 'bg-orange-500/20 text-orange-300 border-orange-500/40 shadow-sm'
-              : 'bg-slate-800/80 hover:bg-slate-700 text-slate-300 border-slate-700'
-          }`}
-          title="Alternar entre visualização Essencial (foco em tomada de decisão) e Avançada (coeficientes profundos de engenharia)"
-        >
-          <SlidersHorizontal size={13} className={isAdvancedMode ? 'text-orange-400' : 'text-slate-400'} />
-          <span>{isAdvancedMode ? 'Modo Avançado (Ativo)' : 'Modo Essencial'}</span>
         </button>
 
         <div className="h-4 w-px bg-slate-800 mx-1" />

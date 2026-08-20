@@ -1,4 +1,4 @@
-/**
+﻿/**
  * pages/viabilidade/Viabilidade.tsx
  * ─────────────────────────────────────────────────────────────────────────────
  * Página Principal do Módulo de Viabilidade de Incorporação (CRD Pro Forma):
@@ -89,7 +89,6 @@ export default function Viabilidade() {
 
   // 2. Modos de Navegação e Visualização
   const [activeTab, setActiveTab] = useState<ViabilityTabId>('resumo')
-  const [isAdvancedMode, setIsAdvancedMode] = useState(false)
   const [activeLineageTrace, setActiveLineageTrace] = useState<LineageTrace | null>(null)
 
   // 3. Execução do Motor Determinístico
@@ -189,8 +188,6 @@ export default function Viabilidade() {
       {/* ── 1. Barra de Cabeçalho Superior ──────────────────────────────────── */}
       <ViabilidadeHeader
         study={study}
-        isAdvancedMode={isAdvancedMode}
-        onToggleAdvancedMode={() => setIsAdvancedMode(prev => !prev)}
         onLoadBlossomFixture={handleLoadBlossomFixture}
         onLoadBlankTemplate={handleLoadBlankTemplate}
         onExportJSON={handleExportJSON}
@@ -239,7 +236,6 @@ export default function Viabilidade() {
         {activeTab === 'terreno' && (
           <Tab02Terreno
             study={study}
-            isAdvancedMode={isAdvancedMode}
             onUpdateLand={handleUpdateLand}
           />
         )}
@@ -247,7 +243,6 @@ export default function Viabilidade() {
         {activeTab === 'produto' && (
           <Tab03Produto
             study={study}
-            isAdvancedMode={isAdvancedMode}
             onUpdateProduct={handleUpdateProduct}
           />
         )}
@@ -255,7 +250,6 @@ export default function Viabilidade() {
         {activeTab === 'cronograma' && (
           <Tab04Cronograma
             study={study}
-            isAdvancedMode={isAdvancedMode}
             onUpdateMilestones={handleUpdateMilestones}
           />
         )}
@@ -263,7 +257,6 @@ export default function Viabilidade() {
         {activeTab === 'vendas' && (
           <Tab05Vendas
             study={study}
-            isAdvancedMode={isAdvancedMode}
             onUpdateSales={handleUpdateSales}
           />
         )}
@@ -271,7 +264,6 @@ export default function Viabilidade() {
         {activeTab === 'custos' && (
           <Tab06Custos
             study={study}
-            isAdvancedMode={isAdvancedMode}
             onUpdateCosts={handleUpdateCosts}
           />
         )}
@@ -280,7 +272,6 @@ export default function Viabilidade() {
           <Tab07Financiamento
             study={study}
             metrics={metrics}
-            isAdvancedMode={isAdvancedMode}
             onUpdateFinancing={handleUpdateFinancing}
           />
         )}

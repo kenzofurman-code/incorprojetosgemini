@@ -14,13 +14,11 @@ import type { ViabilityStudyModel, MilestoneGraphModel } from '../../../types/vi
 
 interface Tab04CronogramaProps {
   study: ViabilityStudyModel
-  isAdvancedMode: boolean
   onUpdateMilestones: (milestones: MilestoneGraphModel) => void
 }
 
 export default function Tab04Cronograma({
   study,
-  isAdvancedMode,
   onUpdateMilestones,
 }: Tab04CronogramaProps) {
   const { milestones } = study

@@ -1,14 +1,4 @@
-/**
- * components/viabilidade/tabs/Tab07Financiamento.tsx
- * ─────────────────────────────────────────────────────────────────────────────
- * Aba 7: Financiamento à Produção (PJ):
- *  - Ativação de Financiamento Bancário (Apoio à Produção / Plano Empresário)
- *  - Percentual financiável da obra, taxa de juros anual e carência
- *  - Simulação de juros na obra e quitação por repasse nas chaves
- * ─────────────────────────────────────────────────────────────────────────────
- */
-
-import React from 'react'
+﻿import React from 'react'
 import { Landmark, DollarSign, Percent, ShieldCheck, HelpCircle } from 'lucide-react'
 import type { ViabilityStudyModel, FinancingModel, ViabilityMetrics } from '../../../types/viabilidade'
 import { formatCurrency } from '../../../utils/formatters'
@@ -16,14 +6,12 @@ import { formatCurrency } from '../../../utils/formatters'
 interface Tab07FinanciamentoProps {
   study: ViabilityStudyModel
   metrics: ViabilityMetrics
-  isAdvancedMode: boolean
   onUpdateFinancing: (financing: FinancingModel) => void
 }
 
 export default function Tab07Financiamento({
   study,
   metrics,
-  isAdvancedMode,
   onUpdateFinancing,
 }: Tab07FinanciamentoProps) {
   const { financing } = study

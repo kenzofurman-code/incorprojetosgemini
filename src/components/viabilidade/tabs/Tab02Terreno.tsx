@@ -16,13 +16,11 @@ import { formatCurrency } from '../../../utils/formatters'
 
 interface Tab02TerrenoProps {
   study: ViabilityStudyModel
-  isAdvancedMode: boolean
   onUpdateLand: (land: LandDealModel) => void
 }
 
 export default function Tab02Terreno({
   study,
-  isAdvancedMode,
   onUpdateLand,
 }: Tab02TerrenoProps) {
   const { land } = study
@@ -59,7 +57,21 @@ export default function Tab02Terreno({
 
           <div>
             <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-              Coeficiente de Aproveitamento Máximo
+              Coeficiente Básico (sem outorga)
+            </label>
+            <input
+              type="number"
+              step="0.1"
+              value={land.basicFar || ''}
+              onChange={e => handleChange('basicFar', parseFloat(e.target.value) || 0)}
+              className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono text-xs focus:border-orange-500 focus:outline-none"
+              placeholder="Ex: 2.5"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+              Coeficiente Máximo Permitido
             </label>
             <input
               type="number"
@@ -71,36 +83,18 @@ export default function Tab02Terreno({
             />
           </div>
 
-          {isAdvancedMode && (
-            <>
-              <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                  Coeficiente Básico (sem outorga)
-                </label>
-                <input
-                  type="number"
-                  step="0.1"
-                  value={land.basicFar || ''}
-                  onChange={e => handleChange('basicFar', parseFloat(e.target.value) || 0)}
-                  className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono text-xs focus:border-orange-500 focus:outline-none"
-                  placeholder="Ex: 2.5"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                  Custo Outorga Onerosa / Potencial Adicional (R$)
-                </label>
-                <input
-                  type="number"
-                  value={land.additionalFarCost || ''}
-                  onChange={e => handleChange('additionalFarCost', parseFloat(e.target.value) || 0)}
-                  className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono text-xs focus:border-orange-500 focus:outline-none"
-                  placeholder="Ex: 350000"
-                />
-              </div>
-            </>
-          )}
+          <div>
+            <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+              Custo Outorga Onerosa / Potencial Adicional (R$)
+            </label>
+            <input
+              type="number"
+              value={land.additionalFarCost || ''}
+              onChange={e => handleChange('additionalFarCost', parseFloat(e.target.value) || 0)}
+              className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono text-xs focus:border-orange-500 focus:outline-none"
+              placeholder="Ex: 350000"
+            />
+          </div>
         </div>
       </div>
 
@@ -218,7 +212,7 @@ export default function Tab02Terreno({
       <div className="p-5 rounded-2xl bg-slate-900/80 border border-slate-800 shadow-xl space-y-4">
         <h3 className="text-sm font-bold text-white flex items-center gap-2 border-b border-slate-800 pb-3">
           <FileCheck size={16} className="text-blue-400" />
-          <span>Custos Acessórios de Aquisição & Legalização</span>
+          <span>Custos Acessórios de Aquisição, Cartório & Solo</span>
         </h3>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -260,33 +254,29 @@ export default function Tab02Terreno({
             />
           </div>
 
-          {isAdvancedMode && (
-            <>
-              <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                  Demolição, Sondagem & Terraplenagem (R$)
-                </label>
-                <input
-                  type="number"
-                  value={land.demolitionAndEarthworkCost || ''}
-                  onChange={e => handleChange('demolitionAndEarthworkCost', parseFloat(e.target.value) || 0)}
-                  className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono text-xs focus:border-orange-500 focus:outline-none"
-                />
-              </div>
+          <div>
+            <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+              Demolição, Sondagem & Terraplenagem (R$)
+            </label>
+            <input
+              type="number"
+              value={land.demolitionAndEarthworkCost || ''}
+              onChange={e => handleChange('demolitionAndEarthworkCost', parseFloat(e.target.value) || 0)}
+              className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono text-xs focus:border-orange-500 focus:outline-none"
+            />
+          </div>
 
-              <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                  Compensação Ambiental & EIV (R$)
-                </label>
-                <input
-                  type="number"
-                  value={land.environmentalCompensationCost || ''}
-                  onChange={e => handleChange('environmentalCompensationCost', parseFloat(e.target.value) || 0)}
-                  className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono text-xs focus:border-orange-500 focus:outline-none"
-                />
-              </div>
-            </>
-          )}
+          <div>
+            <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+              Compensação Ambiental & EIV (R$)
+            </label>
+            <input
+              type="number"
+              value={land.environmentalCompensationCost || ''}
+              onChange={e => handleChange('environmentalCompensationCost', parseFloat(e.target.value) || 0)}
+              className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono text-xs focus:border-orange-500 focus:outline-none"
+            />
+          </div>
         </div>
       </div>
     </div>

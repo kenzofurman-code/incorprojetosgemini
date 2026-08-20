@@ -14,13 +14,11 @@ import type { ViabilityStudyModel, SalesModel, PaymentPlanModel } from '../../..
 
 interface Tab05VendasProps {
   study: ViabilityStudyModel
-  isAdvancedMode: boolean
   onUpdateSales: (sales: SalesModel) => void
 }
 
 export default function Tab05Vendas({
   study,
-  isAdvancedMode,
   onUpdateSales,
 }: Tab05VendasProps) {
   const { sales } = study

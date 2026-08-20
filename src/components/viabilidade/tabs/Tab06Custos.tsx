@@ -1,28 +1,15 @@
-/**
- * components/viabilidade/tabs/Tab06Custos.tsx
- * ─────────────────────────────────────────────────────────────────────────────
- * Aba 6: Custos de Obra & Gerais:
- *  - Orçamento de Obra (R$/m² ou global) e Curva S de Desembolso (12m a 36m)
- *  - Custos de Projetos e Sondagens de Solo
- *  - Marketing, Estande e Comissão de Vendas
- *  - Taxas de Administração de Obra, Gestão da Incorporadora e Reservas
- * ─────────────────────────────────────────────────────────────────────────────
- */
-
-import React from 'react'
+﻿import React from 'react'
 import { Hammer, HardHat, Megaphone, ShieldAlert, Layers } from 'lucide-react'
 import type { ViabilityStudyModel, CostModel } from '../../../types/viabilidade'
 import { formatCurrency } from '../../../utils/formatters'
 
 interface Tab06CustosProps {
   study: ViabilityStudyModel
-  isAdvancedMode: boolean
   onUpdateCosts: (costs: CostModel) => void
 }
 
 export default function Tab06Custos({
   study,
-  isAdvancedMode,
   onUpdateCosts,
 }: Tab06CustosProps) {
   const { costs, product } = study
@@ -222,34 +209,30 @@ export default function Tab06Custos({
             />
           </div>
 
-          {isAdvancedMode && (
-            <>
-              <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                  Taxas Municipais & Licenças (R$)
-                </label>
-                <input
-                  type="number"
-                  value={costs.legalPermitsAndUtilityFees || ''}
-                  onChange={e => handleChange('legalPermitsAndUtilityFees', parseFloat(e.target.value) || 0)}
-                  className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono text-xs focus:border-orange-500 focus:outline-none"
-                />
-              </div>
+          <div>
+            <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+              Taxas Municipais & Licenças (R$)
+            </label>
+            <input
+              type="number"
+              value={costs.legalPermitsAndUtilityFees || ''}
+              onChange={e => handleChange('legalPermitsAndUtilityFees', parseFloat(e.target.value) || 0)}
+              className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono text-xs focus:border-orange-500 focus:outline-none"
+            />
+          </div>
 
-              <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                  Reserva Técnica Pós-Obra (% da Obra)
-                </label>
-                <input
-                  type="number"
-                  step="0.5"
-                  value={costs.postConstructionWarrantyReservePct || 1.5}
-                  onChange={e => handleChange('postConstructionWarrantyReservePct', parseFloat(e.target.value) || 0)}
-                  className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono text-xs focus:border-orange-500 focus:outline-none"
-                />
-              </div>
-            </>
-          )}
+          <div>
+            <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+              Reserva Técnica Pós-Obra (% da Obra)
+            </label>
+            <input
+              type="number"
+              step="0.5"
+              value={costs.postConstructionWarrantyReservePct || 1.5}
+              onChange={e => handleChange('postConstructionWarrantyReservePct', parseFloat(e.target.value) || 0)}
+              className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono text-xs focus:border-orange-500 focus:outline-none"
+            />
+          </div>
         </div>
       </div>
     </div>
