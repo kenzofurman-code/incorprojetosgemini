@@ -4,8 +4,8 @@
  * Motor de Cálculo de Dependências, EAP e CPM (Critical Path Method).
  * Suporta:
  *  - 4 relações do MS Project (FS/TI, SS/II, FF/TT, SF/IT) em Português e Inglês
- *  - Modo com Folgas Permitidas (Permite arrastar tarefas para frente mantendo folga)
- *  - Modo Puxado / Sem Folgas (Elimina folgas puxando sucessoras para a menor data possível)
+ *  - Modo com Folgas Permitidas (Mantém folgas livres)
+ *  - Modo Sem Folgas / Sucessoras Puxadas (Elimina folgas estritamente na cadeia a jusante da tarefa movida)
  *  - Cálculo do Caminho Crítico (CPM) e Rollup Dinâmico de Grupos
  * ─────────────────────────────────────────────────────────────────────────────
  */
@@ -37,7 +37,6 @@ export function parsePredecessorsString(str: string, allTasks: ScheduleTask[]): 
   const result: TaskDependency[] = []
 
   for (const part of parts) {
-    // Regex para capturar: ID/WBS + Tipo (FS|TI|SS|II|FF|TT|SF|IT) + Lag (+2d ou -1d)
     const match = part.match(/^([0-9a-zA-Z._-]+)(FS|TI|SS|II|FF|TT|SF|IT)?([+-]\d+)?d?$/i)
     if (!match) continue
 
@@ -46,7 +45,6 @@ export function parsePredecessorsString(str: string, allTasks: ScheduleTask[]): 
     const type: DependencyType = TYPE_MAP[rawType] || 'FS'
     const lagDays = match[3] ? parseInt(match[3], 10) : 0
 
-    // Encontra a tarefa pelo ID direto ou pelo código WBS
     const target = allTasks.find(t => t.id === idOrWbs || t.wbs === idOrWbs)
     if (target) {
       result.push({
@@ -83,12 +81,38 @@ export interface RecalculateOptions {
 }
 
 /**
- * Recalcula todas as datas da EAP topologicamente a partir das predecessoras
- * e faz o rollup rigoroso das fases/grupos pais.
- *
- * @param tasks Lista de tarefas
- * @param options.allowSlack Se true, permite folgas livres; se false, puxa as sucessoras para a menor data possível
- * @param options.pinnedTaskId ID da tarefa movida manualmente que deve manter sua data
+ * Encontra todos os IDs das tarefas sucessoras a jusante (downstream) de uma tarefa específica
+ */
+export function getDownstreamTaskIds(pinnedTaskId: string, allTasks: ScheduleTask[]): Set<string> {
+  const downstream = new Set<string>()
+  const queue: string[] = [pinnedTaskId]
+
+  const pinnedTask = allTasks.find(t => t.id === pinnedTaskId)
+  if (pinnedTask?.wbs) {
+    queue.push(pinnedTask.wbs)
+  }
+
+  while (queue.length > 0) {
+    const currentId = queue.shift()!
+    for (const t of allTasks) {
+      if (t.id === pinnedTaskId || downstream.has(t.id)) continue
+      const isDirectSuccessor = t.predecessors?.some(
+        p => p.taskId === currentId || (pinnedTask?.wbs && p.taskId === pinnedTask.wbs)
+      )
+      if (isDirectSuccessor) {
+        downstream.add(t.id)
+        queue.push(t.id)
+        if (t.wbs) queue.push(t.wbs)
+      }
+    }
+  }
+
+  return downstream
+}
+
+/**
+ * Recalcula todas as datas da EAP topologicamente a partir das predecessoras.
+ * No modo "Sem Folgas", apenas as sucessoras a jusante da tarefa movida são puxadas para a menor data possível.
  */
 export function recalculateSchedule(
   tasks: ScheduleTask[],
@@ -97,6 +121,11 @@ export function recalculateSchedule(
   const { allowSlack = true, pinnedTaskId } = options
   const taskMap = new Map<string, ScheduleTask>()
   tasks.forEach(t => taskMap.set(t.id, { ...t }))
+
+  // Identifica a cadeia de sucessoras a jusante da tarefa movida
+  const downstreamIds = pinnedTaskId
+    ? getDownstreamTaskIds(pinnedTaskId, tasks)
+    : new Set<string>(tasks.map(t => t.id))
 
   // 1. Recálculo das Tarefas Folhas baseadas em suas predecessoras (Forward Pass)
   let changed = true
@@ -154,17 +183,24 @@ export function recalculateSchedule(
           changed = true
         }
       } else {
-        // Modo Puxado / Sem Folgas (Just-in-Time):
-        // Se for a tarefa arrastada manualmente (pinnedTaskId), mantém a data escolhida
+        // Modo Sem Folgas (Puxar Sucessoras):
         if (task.id === pinnedTaskId) {
+          // A tarefa movida manualmente mantém sua data (respeitando data mínima)
           if (parseDate(maxRequiredStart).getTime() > parseDate(task.startDate).getTime()) {
             task.startDate = maxRequiredStart
             task.endDate = addBusinessDays(maxRequiredStart, Math.max(1, task.durationDays) - 1)
             changed = true
           }
-        } else {
-          // Puxa para a menor data possível
+        } else if (downstreamIds.has(task.id)) {
+          // SOMENTE as tarefas sucessoras a jusante são puxadas para a menor data possível!
           if (task.startDate !== maxRequiredStart) {
+            task.startDate = maxRequiredStart
+            task.endDate = addBusinessDays(maxRequiredStart, Math.max(1, task.durationDays) - 1)
+            changed = true
+          }
+        } else {
+          // Tarefas fora da cadeia a jusante mantêm suas datas e folgas pré-existentes intactas
+          if (parseDate(maxRequiredStart).getTime() > parseDate(task.startDate).getTime()) {
             task.startDate = maxRequiredStart
             task.endDate = addBusinessDays(maxRequiredStart, Math.max(1, task.durationDays) - 1)
             changed = true
@@ -217,7 +253,6 @@ export function calculateCriticalPath(tasks: ScheduleTask[]): ScheduleTask[] {
   const taskMap = new Map<string, ScheduleTask>()
   tasks.forEach(t => taskMap.set(t.id, { ...t, critical: false }))
 
-  // Encontra a data máxima de término de todo o projeto
   let projectEnd = '1970-01-01'
   for (const t of tasks) {
     if (t.endDate && parseDate(t.endDate).getTime() > parseDate(projectEnd).getTime()) {
@@ -225,11 +260,9 @@ export function calculateCriticalPath(tasks: ScheduleTask[]): ScheduleTask[] {
     }
   }
 
-  // Backward Pass simplificado
   for (const task of taskMap.values()) {
     if (task.isGroup) continue
 
-    // Verifica se é tarefa final ou se sucessoras dependem dela
     const successors = Array.from(taskMap.values()).filter(t =>
       t.predecessors?.some(p => p.taskId === task.id || p.taskId === task.wbs)
     )
@@ -263,13 +296,11 @@ export function calculateCriticalPath(tasks: ScheduleTask[]): ScheduleTask[] {
     task.lateFinish = lateFinish
     task.totalFloat = Math.max(0, totalFloat)
 
-    // Caminho Crítico: Folga Total === 0 e não está concluída 100%
     if (task.totalFloat <= 0) {
       task.critical = true
     }
   }
 
-  // Marca os grupos que contêm tarefas críticas
   for (const group of taskMap.values()) {
     if (group.isGroup) {
       const hasCriticalChild = Array.from(taskMap.values()).some(
