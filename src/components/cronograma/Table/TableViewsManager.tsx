@@ -415,7 +415,7 @@ export default function TableViewsManager({
   }
 
   return (
-    <div className="space-y-4">
+    <div className="w-full space-y-4">
       {/* ── 1. Sub-Header de Visualizações de Tabelas (ClickUp Style) ────────── */}
       <div className="flex items-center gap-1.5 px-3 py-2 bg-slate-900/90 rounded-2xl border border-slate-800 overflow-x-auto scrollbar-none shadow-md">
         {views.map(view => {

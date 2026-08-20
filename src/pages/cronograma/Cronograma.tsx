@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Cronograma.tsx
  * ─────────────────────────────────────────────────────────────────────────────
  * Página Principal do Módulo de Cronograma & Gestão de Projetos do IncorProjetos.
@@ -127,7 +127,7 @@ export default function Cronograma() {
   }
 
   return (
-    <div className="p-4 sm:p-6 space-y-5 max-w-[1700px] mx-auto min-h-screen">
+    <div className="w-full min-h-screen p-4 sm:p-6 space-y-5">
       {/* ── 1. Cabeçalho de Navegação Principal do Cronograma ──────────────── */}
       <div className="flex items-center justify-between flex-wrap gap-3 pb-2 border-b border-slate-800">
         <PageHeader
