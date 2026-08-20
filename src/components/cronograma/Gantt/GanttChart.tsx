@@ -195,16 +195,13 @@ export default function GanttChart({
     onTasksChange(recalculated)
   }
 
-  // Alterna entre permitir folgas livres e modo puxado (sem folgas)
+  // Alterna a configuração ativa de permitir folgas
   const handleToggleAllowSlack = () => {
     const nextVal = !allowSlack
     setAllowSlack(nextVal)
     try {
       localStorage.setItem('incor_gantt_allow_slack', String(nextVal))
     } catch { /* silence */ }
-
-    const recalculated = recalculateSchedule(tasks, { allowSlack: nextVal })
-    onTasksChange(recalculated)
   }
 
   // Adiciona nova dependência interativa por arrasto
