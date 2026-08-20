@@ -2,14 +2,15 @@
  * GanttTimeline.tsx
  * ─────────────────────────────────────────────────────────────────────────────
  * Painel de Barras de Tarefas do Gráfico de Gantt:
- *  - Renderização precisa de atividades mãe (englobando todas as filhas de ponta a ponta)
- *  - Criação interativa de dependências por arrasto (drag-to-link) com snap magnético
- *  - Redimensionamento e deslocamento de barras por Drag & Drop
- *  - Abertura de card Pipefy ao clicar
+ *  - Alças de redimensionamento de duração (esquerda e direita) 100% desobstruídas
+ *  - Criação de dependência por arrasto (a partir do botão central ou arrastando entre linhas)
+ *  - Snap magnético suave na tarefa de destino
+ *  - Clique sem arrastar abre o modal Pipefy
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
 import React, { useState, useRef } from 'react'
+import { Link2 } from 'lucide-react'
 import type { ScheduleTask, DependencyType } from '../../../types/cronograma'
 import {
   diffCalendarDays,
@@ -48,6 +49,7 @@ interface DragState {
   taskId: string
   mode: DragMode
   startX: number
+  startY: number
   originalStart: string
   originalEnd: string
   originalDuration: number
@@ -77,7 +79,7 @@ export default function GanttTimeline({
 
   const containerRef = useRef<HTMLDivElement>(null)
 
-  // Inicia arrasto de barra ou conector de dependência
+  // Inicia arrasto de barra, redimensionamento ou dependência
   const handlePointerDown = (
     e: React.PointerEvent,
     task: ScheduleTask,
@@ -88,17 +90,18 @@ export default function GanttTimeline({
     ;(e.target as HTMLElement).setPointerCapture(e.pointerId)
     setHasMoved(false)
 
-    if (mode === 'link') {
-      const taskIndex = visibleTasks.findIndex(t => t.id === task.id)
-      const taskLeft = diffCalendarDays(minDate, task.startDate) * pxPerDay
-      const taskSpan = diffCalendarDays(task.startDate, task.endDate) + 1
-      const fromX = taskLeft + (taskSpan * pxPerDay)
-      const fromY = taskIndex * 36 + 16
+    const taskIndex = visibleTasks.findIndex(t => t.id === task.id)
+    const taskLeft = diffCalendarDays(minDate, task.startDate) * pxPerDay
+    const taskSpan = diffCalendarDays(task.startDate, task.endDate) + 1
+    const fromX = taskLeft + (taskSpan * pxPerDay)
+    const fromY = taskIndex * 36 + 16
 
+    if (mode === 'link') {
       setDragState({
         taskId: task.id,
         mode: 'link',
         startX: e.clientX,
+        startY: e.clientY,
         originalStart: task.startDate,
         originalEnd: task.endDate,
         originalDuration: task.durationDays,
@@ -123,9 +126,12 @@ export default function GanttTimeline({
       taskId: task.id,
       mode,
       startX: e.clientX,
+      startY: e.clientY,
       originalStart: task.startDate,
       originalEnd: task.endDate,
       originalDuration: task.durationDays,
+      fromX,
+      fromY,
     })
   }
 
@@ -134,12 +140,20 @@ export default function GanttTimeline({
     if (!dragState) return
 
     const deltaX = e.clientX - dragState.startX
-    if (Math.abs(deltaX) > 3) {
+    const deltaY = e.clientY - dragState.startY
+
+    if (Math.abs(deltaX) > 3 || Math.abs(deltaY) > 3) {
       setHasMoved(true)
     }
 
+    // Se o usuário iniciou no corpo da barra mas arrastou verticalmente para outra linha (ou com Shift), converte para Link Mode
+    let activeMode = dragState.mode
+    if (activeMode === 'move' && (Math.abs(deltaY) > 14 || e.shiftKey)) {
+      activeMode = 'link'
+    }
+
     // ── Modo Link: Traçando seta de dependência até outra tarefa ──────────────
-    if (dragState.mode === 'link' && dragState.fromX !== undefined && dragState.fromY !== undefined) {
+    if (activeMode === 'link' && dragState.fromX !== undefined && dragState.fromY !== undefined) {
       if (containerRef.current) {
         const rect = containerRef.current.getBoundingClientRect()
         const currentMouseX = e.clientX - rect.left
@@ -186,7 +200,7 @@ export default function GanttTimeline({
     const currentTask = tasks.find(t => t.id === dragState.taskId)
     if (!currentTask) return
 
-    if (dragState.mode === 'move') {
+    if (activeMode === 'move') {
       const newStart = addBusinessDays(dragState.originalStart, deltaDays)
       const newEnd = addBusinessDays(newStart, Math.max(1, currentTask.durationDays) - 1)
 
@@ -197,7 +211,7 @@ export default function GanttTimeline({
           endDate: newEnd,
         })
       }
-    } else if (dragState.mode === 'resize-end') {
+    } else if (activeMode === 'resize-end') {
       const newEnd = addBusinessDays(dragState.originalEnd, deltaDays)
       const newDuration = diffBusinessDays(currentTask.startDate, newEnd)
 
@@ -208,7 +222,7 @@ export default function GanttTimeline({
           durationDays: newDuration,
         })
       }
-    } else if (dragState.mode === 'resize-start') {
+    } else if (activeMode === 'resize-start') {
       const newStart = addBusinessDays(dragState.originalStart, deltaDays)
       const newDuration = diffBusinessDays(newStart, currentTask.endDate)
 
@@ -228,15 +242,15 @@ export default function GanttTimeline({
         ;(e.target as HTMLElement).releasePointerCapture(e.pointerId)
       } catch { /* silence */ }
 
-      // Se estava criando dependência por link e soltou sobre um alvo válido
-      if (dragState.mode === 'link') {
+      // Se estava conectando dependência e soltou sobre um alvo válido
+      if (dragState.mode === 'link' || snapTargetTaskId) {
         if (snapTargetTaskId && snapTargetTaskId !== dragState.taskId) {
           onAddDependency?.(dragState.taskId, snapTargetTaskId, 'FS')
         }
         onConnectingChange?.(null)
         setSnapTargetTaskId(null)
       } else if (!hasMoved) {
-        // Clique sem arrastar abre o modal Pipefy
+        // Clique sem arrasto abre o modal Pipefy
         const task = tasks.find(t => t.id === dragState.taskId)
         if (task) {
           onOpenPipefyModal?.(task)
@@ -257,7 +271,7 @@ export default function GanttTimeline({
       onPointerUp={handlePointerUp}
     >
       {visibleTasks.map((task, index) => {
-        // Se for grupo/fase, calcula início e fim englobando rigorosamente todas as filhas
+        // Se for grupo/fase, calcula início e fim englobando todas as filhas de ponta a ponta
         const children = task.isGroup
           ? tasks.filter(t => t.parentId === task.id || (t.wbs && task.wbs && t.wbs.startsWith(task.wbs + '.')))
           : []
@@ -404,7 +418,7 @@ export default function GanttTimeline({
           >
             {/* Barra Principal da Tarefa */}
             <div
-              className={`h-5 rounded-md relative flex items-center overflow-visible shadow-md transition-all border ${
+              className={`h-5 rounded-md relative flex items-center overflow-hidden shadow-md transition-all border ${
                 isCritical
                   ? 'border-red-400 shadow-red-500/20'
                   : 'border-white/20'
@@ -427,27 +441,27 @@ export default function GanttTimeline({
                 </span>
               )}
 
-              {/* Alça de Redimensionar Esquerda (Início) */}
+              {/* ── Alça de Redimensionar Esquerda (Início) ──────────────────── */}
               <div
-                className="absolute top-0 bottom-0 left-0 w-2.5 cursor-ew-resize opacity-0 group-hover:opacity-100 bg-white/40 hover:bg-white/90 transition-opacity rounded-l-md"
+                className="absolute top-0 bottom-0 left-0 w-3.5 cursor-ew-resize opacity-0 group-hover:opacity-100 bg-white/40 hover:bg-white/90 transition-opacity rounded-l-md z-30"
                 onPointerDown={e => handlePointerDown(e, task, 'resize-start')}
                 title="Arrastar para alterar data de início"
               />
 
-              {/* Alça de Redimensionar Direita (Término) */}
+              {/* ── Alça de Redimensionar Direita (Término / Duração 100% Livre) ─ */}
               <div
-                className="absolute top-0 bottom-0 right-0 w-2.5 cursor-ew-resize opacity-0 group-hover:opacity-100 bg-white/40 hover:bg-white/90 transition-opacity rounded-r-md"
+                className="absolute top-0 bottom-0 right-0 w-3.5 cursor-ew-resize opacity-0 group-hover:opacity-100 bg-white/40 hover:bg-white/90 transition-opacity rounded-r-md z-30"
                 onPointerDown={e => handlePointerDown(e, task, 'resize-end')}
-                title="Arrastar para alterar data de término"
+                title="Arrastar para alterar data de término (duração)"
               />
 
-              {/* ── Conector de Dependência Interativo (Ponto de Ligação FS/TI) ── */}
+              {/* ── Botão Central de Conectar Dependência (FS/TI) ─────────────── */}
               <div
                 onPointerDown={e => handlePointerDown(e, task, 'link')}
-                className="absolute -right-2 top-1/2 -translate-y-1/2 w-4 h-4 rounded-full bg-orange-500 hover:bg-orange-400 border-2 border-white shadow-lg cursor-crosshair opacity-0 group-hover:opacity-100 transition-all flex items-center justify-center z-20 hover:scale-125"
+                className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 p-0.5 rounded bg-black/50 hover:bg-orange-500 text-white cursor-crosshair opacity-0 group-hover:opacity-100 transition-all z-20 hover:scale-110 shadow-sm"
                 title="Arraste até outra tarefa para criar dependência (Término-Início / FS)"
               >
-                <div className="w-1 h-1 rounded-full bg-white pointer-events-none" />
+                <Link2 size={11} className="pointer-events-none" />
               </div>
             </div>
 
