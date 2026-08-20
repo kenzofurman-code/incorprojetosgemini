@@ -2,10 +2,11 @@
  * GanttTimeline.tsx
  * ─────────────────────────────────────────────────────────────────────────────
  * Painel de Barras de Tarefas do Gráfico de Gantt:
- *  - Alças de redimensionamento de duração (esquerda e direita) 100% desobstruídas
- *  - Criação de dependência por arrasto (a partir do botão central ou arrastando entre linhas)
- *  - Snap magnético suave na tarefa de destino
- *  - Clique sem arrastar abre o modal Pipefy
+ *  - Atividades mãe (grupos) com colchetes cobrindo 100% da extensão de suas filhas
+ *  - Rótulo de texto posicionado à direita fora da barra (sem comprimir a barra)
+ *  - Modal Pipefy restrito exclusivamente a tarefas filhas/folhas
+ *  - Alças de redimensionamento de duração 100% livres nas pontas
+ *  - Conexão de dependências por arrasto do botão central ou entre linhas
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
@@ -146,7 +147,7 @@ export default function GanttTimeline({
       setHasMoved(true)
     }
 
-    // Se o usuário iniciou no corpo da barra mas arrastou verticalmente para outra linha (ou com Shift), converte para Link Mode
+    // Se iniciou no corpo da barra e arrastou verticalmente para outra linha, converte para Link Mode
     let activeMode = dragState.mode
     if (activeMode === 'move' && (Math.abs(deltaY) > 14 || e.shiftKey)) {
       activeMode = 'link'
@@ -242,7 +243,6 @@ export default function GanttTimeline({
         ;(e.target as HTMLElement).releasePointerCapture(e.pointerId)
       } catch { /* silence */ }
 
-      // Se estava conectando dependência e soltou sobre um alvo válido
       if (dragState.mode === 'link' || snapTargetTaskId) {
         if (snapTargetTaskId && snapTargetTaskId !== dragState.taskId) {
           onAddDependency?.(dragState.taskId, snapTargetTaskId, 'FS')
@@ -250,9 +250,9 @@ export default function GanttTimeline({
         onConnectingChange?.(null)
         setSnapTargetTaskId(null)
       } else if (!hasMoved) {
-        // Clique sem arrasto abre o modal Pipefy
+        // Clique sem arrasto abre o modal Pipefy APENAS para tarefas filhas
         const task = tasks.find(t => t.id === dragState.taskId)
-        if (task) {
+        if (task && !task.isGroup) {
           onOpenPipefyModal?.(task)
         }
       }
@@ -315,19 +315,16 @@ export default function GanttTimeline({
           return (
             <div
               key={task.id}
-              className={`absolute h-5 flex items-center group cursor-pointer ${
+              className={`absolute h-5 group cursor-pointer ${
                 isSnapTarget ? 'ring-2 ring-emerald-400 ring-offset-2 ring-offset-slate-900 rounded-sm' : ''
               }`}
               style={{ left, top, width }}
-              onClick={() => {
-                onTaskSelect?.(task)
-                onOpenPipefyModal?.(task)
-              }}
+              onClick={() => onTaskSelect?.(task)}
               onMouseEnter={() => setHoveredTaskId(task.id)}
               onMouseLeave={() => setHoveredTaskId(null)}
-              title={`${task.name} • ${formatDateBR(effectiveStart)} a ${formatDateBR(effectiveEnd)} (Clique para abrir detalhes)`}
+              title={`${task.name} • ${formatDateBR(effectiveStart)} a ${formatDateBR(effectiveEnd)}`}
             >
-              {/* Barra Sumário / Rollup */}
+              {/* Barra Sumário / Rollup (100% da largura das datas) */}
               {task.collapsed ? (
                 // Trilho de Rollup com mini-barras coloridas das tarefas filhas
                 <div className="w-full h-3.5 rounded-md bg-slate-800/80 border border-slate-700 relative overflow-hidden flex items-center shadow-md">
@@ -350,7 +347,7 @@ export default function GanttTimeline({
                   })}
                 </div>
               ) : (
-                // Colchete de fase com extremidades verticais precisas
+                // Colchete de fase cobrindo 100% da largura do período
                 <div className="w-full h-5 relative flex items-center">
                   <div
                     className="w-full h-2.5 rounded-xs"
@@ -367,8 +364,8 @@ export default function GanttTimeline({
                 </div>
               )}
 
-              {/* Rótulo de texto à direita */}
-              <span className="ml-2 text-[11px] font-bold text-slate-300 whitespace-nowrap drop-shadow-sm pointer-events-none">
+              {/* Rótulo de texto posicionado FORA da barra, sem comprimi-la */}
+              <span className="absolute left-full top-0 ml-3 text-[11px] font-bold text-slate-300 whitespace-nowrap drop-shadow-sm pointer-events-none">
                 {task.name} ({task.progress}%)
               </span>
             </div>
