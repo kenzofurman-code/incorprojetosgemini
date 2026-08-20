@@ -15,6 +15,7 @@ import Versoes from './pages/obra/Versoes'
 import Plotagem from './pages/plotagem/Plotagem'
 import BIMPage from './pages/bim/BIMPage'
 import CADPage from './pages/cad/CADPage'
+import Viabilidade from './pages/viabilidade/Viabilidade'
 import Configuracoes from './pages/projetos/Configuracoes'
 
 // ─── Auth Guard ───────────────────────────────────────────────────────────────
@@ -81,6 +82,7 @@ export default function App() {
           >
             <Route index element={<Navigate to="/dashboard" replace />} />
             <Route path="dashboard"                    element={<Dashboard />} />
+            <Route path="viabilidade"                  element={<Viabilidade />} />
             <Route path="cronograma"                   element={<Cronograma />} />
             <Route path="projetos"                     element={<Projetos />} />
             <Route path="projetos/:id/comparar"        element={<Comparar />} />

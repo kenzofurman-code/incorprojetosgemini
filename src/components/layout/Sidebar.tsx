@@ -2,12 +2,14 @@ import { NavLink, useLocation, useNavigate } from 'react-router-dom'
 import {
   LayoutDashboard, Calendar, FolderOpen, FileSearch,
   Building2, Printer, ChevronLeft, ChevronRight,
-  HardHat, LogOut, Layers, Box, PenLine, Settings
+  HardHat, LogOut, Layers, Box, PenLine, Settings,
+  TrendingUp, FileSpreadsheet
 } from 'lucide-react'
 import { useApp } from '../../context/AppContext'
 
 const OFFICE_NAV = [
   { to: '/dashboard',   icon: LayoutDashboard, label: 'Dashboard'        },
+  { to: '/viabilidade', icon: TrendingUp,      label: 'Viabilidade'      },
   { to: '/cronograma',  icon: Calendar,         label: 'Cronograma'       },
   { to: '/projetos',    icon: FolderOpen,       label: 'Projetos'         },
   { to: '/revisao',     icon: FileSearch,       label: 'Revisão'          },
