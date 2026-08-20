@@ -158,6 +158,9 @@ export default function GanttChart({
     return { minDate: minDateStr, totalDays: span }
   }, [tasks])
 
+  const pxPerDay = ZOOM_PX_PER_DAY[zoom]
+  const totalWidth = totalDays * pxPerDay
+
   // Filtra tarefas visíveis (respeitando grupos recolhidos e filtro de caminho crítico)
   const visibleTasks = useMemo(() => {
     const collapsedGroupIds = new Set(
@@ -176,7 +179,6 @@ export default function GanttChart({
     return list
   }, [tasks, showCriticalOnly])
 
-  // Atualização de tarefa individual
   // Atualização de tarefa individual
   const handleTaskUpdate = (updatedTask: ScheduleTask) => {
     const nextList = tasks.map(t => t.id === updatedTask.id ? updatedTask : t)
@@ -442,34 +444,40 @@ export default function GanttChart({
           className="flex-1 overflow-auto relative bg-[#0d1620]"
           style={{ height: 'calc(100vh - 280px)', minHeight: 460 }}
         >
-          <div className="relative min-w-full">
+          <div className="relative" style={{ width: totalWidth, minWidth: '100%' }}>
             {/* Régua Temporal Sticky no Topo */}
             <GanttHeader minDate={minDate} totalDays={totalDays} zoom={zoom} />
 
-            {/* Camada SVG de Conexões e Dependências */}
-            <GanttDependencySvg
-              tasks={tasks}
-              visibleTasks={visibleTasks}
-              minDate={minDate}
-              totalDays={totalDays}
-              zoom={zoom}
-              totalHeight={visibleTasks.length * 36}
-              activeConnecting={activeConnecting}
-            />
+            {/* Área do Corpo das Tarefas (Mesmo Sistema de Coordenadas para SVG e Barras) */}
+            <div
+              className="relative"
+              style={{ width: totalWidth, height: visibleTasks.length * 36 }}
+            >
+              {/* Camada SVG de Conexões e Dependências */}
+              <GanttDependencySvg
+                tasks={tasks}
+                visibleTasks={visibleTasks}
+                minDate={minDate}
+                totalDays={totalDays}
+                zoom={zoom}
+                totalHeight={visibleTasks.length * 36}
+                activeConnecting={activeConnecting}
+              />
 
-            {/* Barras de Tarefas Interativas */}
-            <GanttTimeline
-              tasks={tasks}
-              visibleTasks={visibleTasks}
-              minDate={minDate}
-              totalDays={totalDays}
-              zoom={zoom}
-              onTaskUpdate={handleTaskUpdate}
-              onTaskSelect={handleSelectTask}
-              onOpenPipefyModal={onOpenPipefyModal}
-              onAddDependency={handleAddDependency}
-              onConnectingChange={setActiveConnecting}
-            />
+              {/* Barras de Tarefas Interativas */}
+              <GanttTimeline
+                tasks={tasks}
+                visibleTasks={visibleTasks}
+                minDate={minDate}
+                totalDays={totalDays}
+                zoom={zoom}
+                onTaskUpdate={handleTaskUpdate}
+                onTaskSelect={handleSelectTask}
+                onOpenPipefyModal={onOpenPipefyModal}
+                onAddDependency={handleAddDependency}
+                onConnectingChange={setActiveConnecting}
+              />
+            </div>
           </div>
         </div>
       </div>
