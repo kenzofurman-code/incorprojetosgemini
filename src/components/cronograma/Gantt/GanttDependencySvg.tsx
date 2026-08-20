@@ -2,8 +2,8 @@
  * GanttDependencySvg.tsx
  * ─────────────────────────────────────────────────────────────────────────────
  * Camada SVG Nativa para Renderização da Grade e Setas de Dependência.
- * Traça conexões ortogonais e curvas suaves entre o término da predecessora
- * e o início da sucessora, com destaque em vermelho para o Caminho Crítico.
+ * Traça conexões ortogonais centralizadas verticalmente com as barras de origem
+ * e destino, com destaque em vermelho para o Caminho Crítico.
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
@@ -43,7 +43,7 @@ export default function GanttDependencySvg({
     return null
   }, [minDate, todayStr, totalDays, pxPerDay])
 
-  // Calcula trajetos das setas de dependência
+  // Calcula trajetos das setas de dependência perfeitamente centralizadas
   const dependencyPaths = useMemo(() => {
     const paths: { id: string; d: string; critical: boolean }[] = []
     const taskIndexMap = new Map<string, number>()
@@ -56,7 +56,8 @@ export default function GanttDependencySvg({
       if (succIdx === undefined) continue
 
       const succX = diffCalendarDays(minDate, succ.startDate) * pxPerDay
-      const succY = succIdx * 36 + 18
+      // Centro vertical da barra: linha * 36 + 16 (offset 6 + metade de 20 = 16)
+      const succY = succIdx * 36 + 16
 
       for (const dep of succ.predecessors) {
         const predIdx = taskIndexMap.get(dep.taskId)
@@ -64,7 +65,7 @@ export default function GanttDependencySvg({
 
         const pred = visibleTasks[predIdx]
         const predX = (diffCalendarDays(minDate, pred.endDate) + 1) * pxPerDay
-        const predY = predIdx * 36 + 18
+        const predY = predIdx * 36 + 16
 
         const isCritical = Boolean(succ.critical && pred.critical)
 
@@ -111,7 +112,7 @@ export default function GanttDependencySvg({
           markerHeight="5"
           orient="auto-start-reverse"
         >
-          <path d="M 0 1 L 8 5 L 0 9 z" fill="#64748b" />
+          <path d="M 0 1 L 8 5 L 0 9 z" fill="#94a3b8" />
         </marker>
 
         {/* Marcador de seta crítica (vermelho/laranja) */}
@@ -150,9 +151,9 @@ export default function GanttDependencySvg({
           key={p.id}
           d={p.d}
           fill="none"
-          stroke={p.critical ? '#ef4444' : '#64748b'}
+          stroke={p.critical ? '#ef4444' : '#94a3b8'}
           strokeWidth={p.critical ? 2 : 1.5}
-          strokeOpacity={p.critical ? 0.95 : 0.65}
+          strokeOpacity={p.critical ? 0.95 : 0.75}
           markerEnd={p.critical ? 'url(#gantt-arrow-critical)' : 'url(#gantt-arrow-normal)'}
         />
       ))}

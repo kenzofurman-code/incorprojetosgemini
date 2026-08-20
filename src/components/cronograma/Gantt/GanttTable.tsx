@@ -3,32 +3,29 @@
  * ─────────────────────────────────────────────────────────────────────────────
  * Tabela EAP/WBS Tabular com Edição Inline Click-to-Edit (Estilo Excel / MS Project).
  * Suporta:
+ *  - Redimensionamento interativo de largura de cada coluna por arrasto
  *  - Visual 100% tabular limpo (sem inputs soltos poluindo a tela)
- *  - Edição inline fluída ao clicar na célula (Nome, Início, Fim, Duração, Predecessoras, Responsável, %, Status)
+ *  - Edição inline fluída ao clicar na célula
  *  - Reordenação livre de colunas por Drag & Drop no cabeçalho
- *  - Estrutura hierárquica (fases, subtarefas, recuo e collapse)
- *  - Ações rápidas (+ Subtarefa, Entregáveis, Excluir)
+ *  - Ações rápidas (+ Subtarefa, Excluir)
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
-import React, { useState } from 'react'
+import React, { useState, useRef } from 'react'
 import {
   ChevronRight,
   ChevronDown,
   Plus,
   Trash2,
-  Link2,
   CheckCircle2,
   Clock,
   AlertTriangle,
   Flame,
   FileCheck,
   GripVertical,
-  Sliders,
 } from 'lucide-react'
 import type { ScheduleTask, TaskStatus } from '../../../types/cronograma'
 import {
-  formatDateISO,
   formatDateBR,
   addBusinessDays,
   diffBusinessDays,
@@ -53,21 +50,22 @@ export type GanttColumnId =
 export interface GanttColumnDef {
   id: GanttColumnId
   label: string
-  width: number
+  defaultWidth: number
+  minWidth: number
   align?: 'left' | 'center' | 'right'
 }
 
 export const DEFAULT_GANTT_COLUMNS: GanttColumnDef[] = [
-  { id: 'wbs',          label: 'EDT/WBS',     width: 70,  align: 'center' },
-  { id: 'name',         label: 'Atividade',   width: 220, align: 'left' },
-  { id: 'startDate',    label: 'Início',      width: 90,  align: 'center' },
-  { id: 'endDate',      label: 'Término',     width: 90,  align: 'center' },
-  { id: 'duration',     label: 'Dias',        width: 55,  align: 'center' },
-  { id: 'predecessors', label: 'Predec.',     width: 85,  align: 'center' },
-  { id: 'responsible',  label: 'Responsável', width: 120, align: 'left' },
-  { id: 'progress',     label: '%',           width: 55,  align: 'center' },
-  { id: 'status',       label: 'Status',      width: 105, align: 'center' },
-  { id: 'actions',      label: 'Ações',       width: 80,  align: 'center' },
+  { id: 'wbs',          label: 'EDT/WBS',     defaultWidth: 70,  minWidth: 50,  align: 'center' },
+  { id: 'name',         label: 'Atividade',   defaultWidth: 260, minWidth: 120, align: 'left' },
+  { id: 'startDate',    label: 'Início',      defaultWidth: 95,  minWidth: 75,  align: 'center' },
+  { id: 'endDate',      label: 'Término',     defaultWidth: 95,  minWidth: 75,  align: 'center' },
+  { id: 'duration',     label: 'Dias',        defaultWidth: 55,  minWidth: 45,  align: 'center' },
+  { id: 'predecessors', label: 'Predec.',     defaultWidth: 90,  minWidth: 60,  align: 'center' },
+  { id: 'responsible',  label: 'Responsável', defaultWidth: 140, minWidth: 80,  align: 'left' },
+  { id: 'progress',     label: '%',           defaultWidth: 55,  minWidth: 45,  align: 'center' },
+  { id: 'status',       label: 'Status',      defaultWidth: 110, minWidth: 90,  align: 'center' },
+  { id: 'actions',      label: 'Ações',       defaultWidth: 65,  minWidth: 55,  align: 'center' },
 ]
 
 interface GanttTableProps {
@@ -107,13 +105,27 @@ export default function GanttTable({
   selectedTaskId,
   onSelectTask,
 }: GanttTableProps) {
-  // Célula ativa em edição inline: { taskId, columnId }
+  // Célula ativa em edição inline
   const [editingCell, setEditingCell] = useState<{ taskId: string; columnId: GanttColumnId } | null>(null)
   const [tempValue, setTempValue] = useState<string>('')
+
+  // Larguras individuais de coluna persistidas
+  const [colWidths, setColWidths] = useState<Record<GanttColumnId, number>>(() => {
+    try {
+      const saved = localStorage.getItem('incor_gantt_col_widths')
+      if (saved) return JSON.parse(saved)
+    } catch { /* silence */ }
+    const initial: Record<string, number> = {}
+    DEFAULT_GANTT_COLUMNS.forEach(c => { initial[c.id] = c.defaultWidth })
+    return initial as Record<GanttColumnId, number>
+  })
 
   // Drag de Reordenação de Colunas
   const [draggedColId, setDraggedColId] = useState<GanttColumnId | null>(null)
   const [dragOverColId, setDragOverColId] = useState<GanttColumnId | null>(null)
+
+  // Drag de Redimensionamento de Colunas
+  const resizingRef = useRef<{ colId: GanttColumnId; startX: number; startWidth: number } | null>(null)
 
   // Map de definições de coluna
   const colDefMap = new Map<GanttColumnId, GanttColumnDef>()
@@ -121,18 +133,16 @@ export default function GanttTable({
 
   // Largura total da tabela
   const totalTableWidth = columnsOrder.reduce((acc, colId) => {
-    return acc + (colDefMap.get(colId)?.width || 80)
+    return acc + (colWidths[colId] || colDefMap.get(colId)?.defaultWidth || 80)
   }, 0)
 
-  // Nível de profundidade pela WBS (ex: "1" = 0, "1.1" = 1, "1.1.1" = 2)
-  const getDepth = (wbs: string) => {
-    return (wbs.match(/\./g) || []).length
-  }
+  // Nível de profundidade pela WBS
+  const getDepth = (wbs: string) => (wbs.match(/\./g) || []).length
 
   // Inicia edição de uma célula
   const handleStartEdit = (task: ScheduleTask, columnId: GanttColumnId) => {
     if (task.isGroup && (columnId === 'duration' || columnId === 'startDate' || columnId === 'endDate' || columnId === 'predecessors')) {
-      return // Datas de grupos são calculadas por rollup
+      return
     }
 
     setEditingCell({ taskId: task.id, columnId })
@@ -183,7 +193,7 @@ export default function GanttTable({
     setEditingCell(null)
   }
 
-  // ── Drag and Drop de Colunas ───────────────────────────────────────────────
+  // ── Drag & Drop de Reordenação de Colunas ──────────────────────────────────
   const handleColDragStart = (e: React.DragEvent, colId: GanttColumnId) => {
     setDraggedColId(colId)
     e.dataTransfer.setData('text/plain', colId)
@@ -218,36 +228,89 @@ export default function GanttTable({
     setDragOverColId(null)
   }
 
+  // ── Redimensionamento de Largura da Coluna ─────────────────────────────────
+  const handleStartColResize = (e: React.PointerEvent, colId: GanttColumnId) => {
+    e.preventDefault()
+    e.stopPropagation()
+    ;(e.target as HTMLElement).setPointerCapture(e.pointerId)
+
+    resizingRef.current = {
+      colId,
+      startX: e.clientX,
+      startWidth: colWidths[colId] || colDefMap.get(colId)?.defaultWidth || 80,
+    }
+  }
+
+  const handleColResizeMove = (e: React.PointerEvent) => {
+    if (!resizingRef.current) return
+    const { colId, startX, startWidth } = resizingRef.current
+    const deltaX = e.clientX - startX
+    const minW = colDefMap.get(colId)?.minWidth || 45
+    const newWidth = Math.max(minW, Math.min(600, startWidth + deltaX))
+
+    setColWidths(prev => {
+      const updated = { ...prev, [colId]: newWidth }
+      return updated
+    })
+  }
+
+  const handleColResizeUp = (e: React.PointerEvent) => {
+    if (resizingRef.current) {
+      try {
+        ;(e.target as HTMLElement).releasePointerCapture(e.pointerId)
+      } catch { /* silence */ }
+      resizingRef.current = null
+      try {
+        localStorage.setItem('incor_gantt_col_widths', JSON.stringify(colWidths))
+      } catch { /* silence */ }
+    }
+  }
+
   return (
     <div
       className="bg-slate-900 select-none overflow-x-auto min-h-full flex flex-col"
       style={{ width: Math.max(totalTableWidth, 300) }}
+      onPointerMove={handleColResizeMove}
+      onPointerUp={handleColResizeUp}
     >
-      {/* ── Cabeçalho Tabular com Drag & Drop de Colunas ─────────────────────── */}
+      {/* ── Cabeçalho Tabular com Drag & Drop e Redimensionamento ────────────── */}
       <div className="sticky top-0 z-20 flex items-center h-[52px] border-b border-slate-800 bg-slate-950/95 text-[11px] font-bold text-slate-400 uppercase tracking-wider">
         {columnsOrder.map(colId => {
           const colDef = colDefMap.get(colId)
           if (!colDef) return null
 
+          const width = colWidths[colId] || colDef.defaultWidth
           const isDragging = draggedColId === colId
           const isDragOver = dragOverColId === colId
 
           return (
             <div
               key={colId}
-              draggable
-              onDragStart={e => handleColDragStart(e, colId)}
-              onDragOver={e => handleColDragOver(e, colId)}
-              onDrop={e => handleColDrop(e, colId)}
-              onDragLeave={() => setDragOverColId(null)}
-              style={{ width: colDef.width }}
-              className={`h-full px-2 flex items-center justify-between border-r border-slate-800 transition-all cursor-grab active:cursor-grabbing hover:bg-slate-800/80 hover:text-white ${
+              style={{ width }}
+              className={`h-full px-2 relative flex items-center justify-between border-r border-slate-800 transition-all hover:bg-slate-800/80 hover:text-white ${
                 isDragging ? 'opacity-40 bg-orange-500/20' : ''
               } ${isDragOver ? 'border-l-2 border-orange-500 bg-orange-500/10' : ''}`}
-              title="Clique e arraste para reordenar esta coluna"
             >
-              <span className="truncate flex-1 text-center">{colDef.label}</span>
-              <GripVertical size={11} className="text-slate-600 opacity-40 hover:opacity-100 flex-shrink-0 ml-1" />
+              {/* Área arrastável para reordenar coluna */}
+              <div
+                draggable
+                onDragStart={e => handleColDragStart(e, colId)}
+                onDragOver={e => handleColDragOver(e, colId)}
+                onDrop={e => handleColDrop(e, colId)}
+                onDragLeave={() => setDragOverColId(null)}
+                className="flex items-center justify-between flex-1 overflow-hidden cursor-grab active:cursor-grabbing"
+                title="Clique e arraste para reordenar esta coluna"
+              >
+                <span className="truncate flex-1 text-center">{colDef.label}</span>
+                <GripVertical size={11} className="text-slate-600 opacity-40 hover:opacity-100 flex-shrink-0 ml-1" />
+              </div>
+
+              {/* Alça de redimensionamento de largura da coluna */}
+              <div
+                onPointerDown={e => handleStartColResize(e, colId)}
+                className="absolute right-0 top-0 bottom-0 w-2 hover:w-2.5 hover:bg-orange-500/80 cursor-col-resize z-10 transition-colors"
+                title="Arraste para redimensionar a largura desta coluna"
+              />
             </div>
           )
         })}
@@ -277,6 +340,7 @@ export default function GanttTable({
                 const colDef = colDefMap.get(colId)
                 if (!colDef) return null
 
+                const width = colWidths[colId] || colDef.defaultWidth
                 const isEditing = editingCell?.taskId === task.id && editingCell?.columnId === colId
 
                 // ── 1. COLUNA: EDT / WBS ─────────────────────────────────────
@@ -284,7 +348,7 @@ export default function GanttTable({
                   return (
                     <div
                       key={colId}
-                      style={{ width: colDef.width }}
+                      style={{ width }}
                       onClick={() => handleStartEdit(task, 'wbs')}
                       className="h-full px-1.5 flex items-center justify-center font-mono text-[11px] text-slate-400 border-r border-slate-800/70 truncate cursor-text"
                     >
@@ -318,7 +382,7 @@ export default function GanttTable({
                     <div
                       key={colId}
                       style={{
-                        width: colDef.width,
+                        width,
                         paddingLeft: `${depth * 14 + 8}px`,
                       }}
                       className="h-full px-2 flex items-center gap-1.5 border-r border-slate-800/70 overflow-hidden cursor-pointer"
@@ -382,7 +446,7 @@ export default function GanttTable({
                   return (
                     <div
                       key={colId}
-                      style={{ width: colDef.width }}
+                      style={{ width }}
                       onClick={() => handleStartEdit(task, 'startDate')}
                       className="h-full px-1.5 flex items-center justify-center font-mono text-[11px] text-slate-300 border-r border-slate-800/70 cursor-text"
                     >
@@ -408,7 +472,7 @@ export default function GanttTable({
                   return (
                     <div
                       key={colId}
-                      style={{ width: colDef.width }}
+                      style={{ width }}
                       onClick={() => handleStartEdit(task, 'endDate')}
                       className="h-full px-1.5 flex items-center justify-center font-mono text-[11px] text-slate-300 border-r border-slate-800/70 cursor-text"
                     >
@@ -434,7 +498,7 @@ export default function GanttTable({
                   return (
                     <div
                       key={colId}
-                      style={{ width: colDef.width }}
+                      style={{ width }}
                       onClick={() => handleStartEdit(task, 'duration')}
                       className="h-full px-1 flex items-center justify-center font-mono text-[11px] text-slate-300 border-r border-slate-800/70 cursor-text"
                     >
@@ -462,7 +526,7 @@ export default function GanttTable({
                   return (
                     <div
                       key={colId}
-                      style={{ width: colDef.width }}
+                      style={{ width }}
                       onClick={() => handleStartEdit(task, 'predecessors')}
                       className="h-full px-1.5 flex items-center justify-center font-mono text-[11px] text-slate-400 border-r border-slate-800/70 truncate cursor-text"
                     >
@@ -489,7 +553,7 @@ export default function GanttTable({
                   return (
                     <div
                       key={colId}
-                      style={{ width: colDef.width }}
+                      style={{ width }}
                       onClick={() => handleStartEdit(task, 'responsible')}
                       className="h-full px-2 flex items-center border-r border-slate-800/70 truncate cursor-text"
                     >
@@ -515,7 +579,7 @@ export default function GanttTable({
                   return (
                     <div
                       key={colId}
-                      style={{ width: colDef.width }}
+                      style={{ width }}
                       onClick={() => handleStartEdit(task, 'progress')}
                       className="h-full px-1 flex items-center justify-center font-mono text-[11px] text-slate-300 border-r border-slate-800/70 cursor-text"
                     >
@@ -545,7 +609,7 @@ export default function GanttTable({
                   return (
                     <div
                       key={colId}
-                      style={{ width: colDef.width }}
+                      style={{ width }}
                       className="h-full px-1.5 flex items-center justify-center border-r border-slate-800/70"
                     >
                       <select
@@ -577,7 +641,7 @@ export default function GanttTable({
                   return (
                     <div
                       key={colId}
-                      style={{ width: colDef.width }}
+                      style={{ width }}
                       className="h-full px-1 flex items-center justify-center gap-1 border-r border-slate-800/70"
                     >
                       {task.isGroup && (
@@ -587,22 +651,11 @@ export default function GanttTable({
                             onAddSubtask(task)
                           }}
                           className="p-1 rounded hover:bg-orange-500/20 text-slate-400 hover:text-orange-400 cursor-pointer"
-                          title="Adicionar subtarefa"
+                          title="Adicionar subtarefa nesta fase"
                         >
                           <Plus size={12} />
                         </button>
                       )}
-
-                      <button
-                        onClick={e => {
-                          e.stopPropagation()
-                          onOpenPipefyModal?.(task)
-                        }}
-                        className="p-1 rounded hover:bg-blue-500/20 text-slate-400 hover:text-blue-400 cursor-pointer"
-                        title="Abrir detalhes e campos personalizados (Pipefy)"
-                      >
-                        <Sliders size={12} />
-                      </button>
 
                       <button
                         onClick={e => {

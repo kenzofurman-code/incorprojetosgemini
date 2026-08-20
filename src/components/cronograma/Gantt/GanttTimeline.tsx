@@ -7,18 +7,17 @@
  *  - Linha de Base (Baseline) comparativa
  *  - Modo Rollup para grupos e fases recolhidas
  *  - Marcos (Milestones) em formato de diamante
- *  - Interatividade via Pointer Events nativos
+ *  - Abertura do modal completo estilo Pipefy ao clicar na barra da tarefa
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
-import React, { useRef, useState } from 'react'
+import React, { useState } from 'react'
 import type { ScheduleTask } from '../../../types/cronograma'
 import {
   diffCalendarDays,
   addBusinessDays,
   diffBusinessDays,
   formatDateBR,
-  getNextBusinessDay,
 } from '../../../lib/businessCalendar'
 import { ZOOM_PX_PER_DAY, type GanttZoomLevel } from './GanttHeader'
 
@@ -30,6 +29,7 @@ interface GanttTimelineProps {
   zoom: GanttZoomLevel
   onTaskUpdate: (task: ScheduleTask) => void
   onTaskSelect?: (task: ScheduleTask) => void
+  onOpenPipefyModal?: (task: ScheduleTask) => void
 }
 
 type DragMode = 'move' | 'resize-start' | 'resize-end' | null
@@ -51,12 +51,14 @@ export default function GanttTimeline({
   zoom,
   onTaskUpdate,
   onTaskSelect,
+  onOpenPipefyModal,
 }: GanttTimelineProps) {
   const pxPerDay = ZOOM_PX_PER_DAY[zoom]
   const totalWidth = totalDays * pxPerDay
 
   const [dragState, setDragState] = useState<DragState | null>(null)
   const [hoveredTaskId, setHoveredTaskId] = useState<string | null>(null)
+  const [hasMoved, setHasMoved] = useState(false)
 
   // Inicia arrasto
   const handlePointerDown = (
@@ -68,6 +70,7 @@ export default function GanttTimeline({
     e.preventDefault()
     e.stopPropagation()
     ;(e.target as HTMLElement).setPointerCapture(e.pointerId)
+    setHasMoved(false)
 
     setDragState({
       taskId: task.id,
@@ -84,6 +87,10 @@ export default function GanttTimeline({
     if (!dragState) return
 
     const deltaX = e.clientX - dragState.startX
+    if (Math.abs(deltaX) > 3) {
+      setHasMoved(true)
+    }
+
     const deltaDays = Math.round(deltaX / pxPerDay)
     if (deltaDays === 0) return
 
@@ -131,7 +138,17 @@ export default function GanttTimeline({
       try {
         ;(e.target as HTMLElement).releasePointerCapture(e.pointerId)
       } catch { /* silence */ }
+
+      // Se não houve arrasto significativo, abre o modal Pipefy
+      if (!hasMoved) {
+        const task = tasks.find(t => t.id === dragState.taskId)
+        if (task) {
+          onOpenPipefyModal?.(task)
+        }
+      }
+
       setDragState(null)
+      setHasMoved(false)
     }
   }
 
@@ -145,8 +162,8 @@ export default function GanttTimeline({
       {visibleTasks.map((task, index) => {
         const left = diffCalendarDays(minDate, task.startDate) * pxPerDay
         const calendarSpan = diffCalendarDays(task.startDate, task.endDate) + 1
-        const width = Math.max(18, calendarSpan * pxPerDay)
-        const top = index * 36 + 6
+        const width = Math.max(16, calendarSpan * pxPerDay)
+        const top = index * 36 + 6 // Centro vertical em index * 36 + 16
 
         // Baseline (Linha de Base)
         let baselineLeft = 0
@@ -162,18 +179,22 @@ export default function GanttTimeline({
         const isDragging = dragState?.taskId === task.id
         const barColor = isCritical ? '#EF4444' : task.color || '#3B82F6'
 
-        // ── 1. GRUPOS / FASES ────────────────────────────────────────────────
+        // ── 1. GRUPOS / FASES (ATIVIDADES MÃE) ──────────────────────────────
         if (task.isGroup) {
           const children = tasks.filter(t => t.parentId === task.id)
 
           return (
             <div
               key={task.id}
-              className="absolute h-6 flex items-center group cursor-pointer"
+              className="absolute h-5 flex items-center group cursor-pointer"
               style={{ left, top, width }}
-              onClick={() => onTaskSelect?.(task)}
+              onClick={() => {
+                onTaskSelect?.(task)
+                onOpenPipefyModal?.(task)
+              }}
               onMouseEnter={() => setHoveredTaskId(task.id)}
               onMouseLeave={() => setHoveredTaskId(null)}
+              title={`${task.name} • ${formatDateBR(task.startDate)} a ${formatDateBR(task.endDate)} (Clique para abrir detalhes)`}
             >
               {/* Barra Sumário / Rollup */}
               {task.collapsed ? (
@@ -198,25 +219,25 @@ export default function GanttTimeline({
                   })}
                 </div>
               ) : (
-                // Suporte estilo colchete de fase do MS Project
-                <div className="w-full h-4 relative flex items-center">
+                // Suporte estilo colchete de fase robusto
+                <div className="w-full h-5 relative flex items-center">
                   <div
-                    className="w-full h-2 rounded-xs"
-                    style={{ background: barColor, opacity: 0.8 }}
+                    className="w-full h-2.5 rounded-xs"
+                    style={{ background: barColor, opacity: 0.85 }}
                   />
                   <div
-                    className="absolute left-0 bottom-0 w-2 h-3.5 rounded-bl-sm"
+                    className="absolute left-0 top-0 bottom-0 w-2 rounded-l-xs"
                     style={{ background: barColor }}
                   />
                   <div
-                    className="absolute right-0 bottom-0 w-2 h-3.5 rounded-br-sm"
+                    className="absolute right-0 top-0 bottom-0 w-2 rounded-r-xs"
                     style={{ background: barColor }}
                   />
                 </div>
               )}
 
               {/* Rótulo de texto à direita */}
-              <span className="ml-2 text-[11px] font-bold text-slate-300 whitespace-nowrap drop-shadow-sm">
+              <span className="ml-2 text-[11px] font-bold text-slate-300 whitespace-nowrap drop-shadow-sm pointer-events-none">
                 {task.name} ({task.progress}%)
               </span>
             </div>
@@ -228,34 +249,41 @@ export default function GanttTimeline({
           return (
             <div
               key={task.id}
-              className="absolute h-6 flex items-center group cursor-pointer"
+              className="absolute h-5 flex items-center group cursor-pointer"
               style={{ left: left - 8, top, width: 24 }}
-              onClick={() => onTaskSelect?.(task)}
+              onClick={() => {
+                onTaskSelect?.(task)
+                onOpenPipefyModal?.(task)
+              }}
               onMouseEnter={() => setHoveredTaskId(task.id)}
               onMouseLeave={() => setHoveredTaskId(null)}
+              title={`${task.name} • ${formatDateBR(task.startDate)} (Clique para abrir detalhes)`}
             >
               <div
                 className="w-4 h-4 rotate-45 rounded-xs border border-white/60 shadow-lg transition-transform hover:scale-125 flex items-center justify-center"
                 style={{ background: task.progress === 100 ? '#22C55E' : '#F97316' }}
               />
-              <span className="ml-3 text-[11px] font-semibold text-orange-300 whitespace-nowrap">
+              <span className="ml-3 text-[11px] font-semibold text-orange-300 whitespace-nowrap pointer-events-none">
                 {task.name} ({formatDateBR(task.startDate)})
               </span>
             </div>
           )
         }
 
-        // ── 3. TAREFAS NORMAIS (BARRAS COM DRAG & RESIZE) ────────────────────
+        // ── 3. TAREFAS NORMAIS (BARRAS COM DRAG, RESIZE E CLIQUE PARA PIPEFY) ─
         return (
           <div
             key={task.id}
-            className={`absolute flex flex-col group cursor-grab active:cursor-grabbing ${
-              isDragging ? 'z-30 opacity-90 scale-[1.02]' : 'z-10'
+            className={`absolute flex flex-col group cursor-pointer ${
+              isDragging ? 'z-30 opacity-90 scale-[1.01]' : 'z-10'
             }`}
             style={{ left, top, width }}
             onMouseEnter={() => setHoveredTaskId(task.id)}
             onMouseLeave={() => setHoveredTaskId(null)}
-            onClick={() => onTaskSelect?.(task)}
+            onClick={() => {
+              onTaskSelect?.(task)
+            }}
+            title={`${task.name} • ${formatDateBR(task.startDate)} a ${formatDateBR(task.endDate)} (${task.durationDays}d) • Clique para abrir card Pipefy`}
           >
             {/* Barra Principal da Tarefa */}
             <div
@@ -263,42 +291,42 @@ export default function GanttTimeline({
                 isCritical
                   ? 'border-red-400 shadow-red-500/20'
                   : 'border-white/20'
-              } ${isHovered ? 'ring-2 ring-orange-400/60 shadow-lg' : ''}`}
+              } ${isHovered ? 'ring-2 ring-orange-400/80 shadow-lg' : ''}`}
               style={{ background: barColor }}
               onPointerDown={e => handlePointerDown(e, task, 'move')}
             >
               {/* Preenchimento de Progresso (%) */}
               <div
-                className="absolute top-0 bottom-0 left-0 bg-black/30 transition-all"
+                className="absolute top-0 bottom-0 left-0 bg-black/30 transition-all pointer-events-none"
                 style={{ width: `${task.progress}%` }}
               />
 
               {/* Rótulo de porcentagem interno */}
               {width > 38 && (
-                <span className="relative z-10 px-2 text-[10px] font-bold text-white font-mono drop-shadow-sm truncate">
+                <span className="relative z-10 px-2 text-[10px] font-bold text-white font-mono drop-shadow-sm truncate pointer-events-none">
                   {task.progress}%
                 </span>
               )}
 
               {/* Alça de Redimensionar Esquerda (Início) */}
               <div
-                className="absolute top-0 bottom-0 left-0 w-2 cursor-ew-resize opacity-0 group-hover:opacity-100 bg-white/40 hover:bg-white/80 transition-opacity rounded-l-md"
+                className="absolute top-0 bottom-0 left-0 w-2.5 cursor-ew-resize opacity-0 group-hover:opacity-100 bg-white/40 hover:bg-white/90 transition-opacity rounded-l-md"
                 onPointerDown={e => handlePointerDown(e, task, 'resize-start')}
-                title="Arrastar para alterar início"
+                title="Arrastar para alterar data de início"
               />
 
               {/* Alça de Redimensionar Direita (Término) */}
               <div
-                className="absolute top-0 bottom-0 right-0 w-2 cursor-ew-resize opacity-0 group-hover:opacity-100 bg-white/40 hover:bg-white/80 transition-opacity rounded-r-md"
+                className="absolute top-0 bottom-0 right-0 w-2.5 cursor-ew-resize opacity-0 group-hover:opacity-100 bg-white/40 hover:bg-white/90 transition-opacity rounded-r-md"
                 onPointerDown={e => handlePointerDown(e, task, 'resize-end')}
-                title="Arrastar para alterar duração"
+                title="Arrastar para alterar data de término"
               />
             </div>
 
             {/* Linha de Base (Baseline cinza inferior) */}
             {task.baselineStart && task.baselineEnd && (
               <div
-                className="h-1 rounded-full bg-slate-500/60 mt-0.5"
+                className="h-1 rounded-full bg-slate-500/60 mt-0.5 pointer-events-none"
                 style={{
                   width: baselineWidth,
                   marginLeft: baselineLeft - left,

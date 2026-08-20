@@ -18,7 +18,7 @@ import {
   addBusinessDays,
 } from '../../../lib/businessCalendar'
 import { recalculateSchedule } from '../../../lib/dependencySchedule'
-import GanttHeader, { type GanttZoomLevel } from './GanttHeader'
+import GanttHeader, { type GanttZoomLevel, ZOOM_PX_PER_DAY } from './GanttHeader'
 import GanttTable, { type GanttColumnId } from './GanttTable'
 import GanttTimeline from './GanttTimeline'
 import GanttDependencySvg from './GanttDependencySvg'
@@ -333,6 +333,26 @@ export default function GanttChart({
     e.target.value = ''
   }
 
+  // Seleciona e centraliza a tarefa correspondente na timeline
+  const handleSelectTask = (task: ScheduleTask) => {
+    setSelectedTaskId(task.id)
+
+    if (timelineScrollRef.current) {
+      const pxPerDay = ZOOM_PX_PER_DAY[zoom]
+      const taskLeft = diffCalendarDays(minDate, task.startDate) * pxPerDay
+      const taskSpan = diffCalendarDays(task.startDate, task.endDate) + 1
+      const taskWidth = Math.max(16, taskSpan * pxPerDay)
+      const taskCenterX = taskLeft + (taskWidth / 2)
+      const containerWidth = timelineScrollRef.current.clientWidth || 800
+      const targetScrollLeft = Math.max(0, taskCenterX - (containerWidth / 2))
+
+      timelineScrollRef.current.scrollTo({
+        left: targetScrollLeft,
+        behavior: 'smooth',
+      })
+    }
+  }
+
   return (
     <div className="flex flex-col gap-3 h-full select-none">
       {/* Barra de Ferramentas */}
@@ -376,7 +396,7 @@ export default function GanttChart({
             onOpenDeliverablesModal={onOpenDeliverablesModal}
             onOpenPipefyModal={onOpenPipefyModal}
             selectedTaskId={selectedTaskId}
-            onSelectTask={t => setSelectedTaskId(t.id)}
+            onSelectTask={handleSelectTask}
           />
         </div>
 
@@ -422,7 +442,8 @@ export default function GanttChart({
               totalDays={totalDays}
               zoom={zoom}
               onTaskUpdate={handleTaskUpdate}
-              onTaskSelect={t => setSelectedTaskId(t.id)}
+              onTaskSelect={handleSelectTask}
+              onOpenPipefyModal={onOpenPipefyModal}
             />
           </div>
         </div>
