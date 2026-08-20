@@ -1,31 +1,31 @@
-/**
+﻿/**
  * Cronograma.tsx
  * ─────────────────────────────────────────────────────────────────────────────
- * Página Principal do Módulo de Cronograma Avançado do IncorProjetos.
+ * Página Principal do Módulo de Cronograma & Gestão de Atividades do IncorProjetos.
  * Integra em uma base de dados sincronizada:
- *  1. Gráfico de Gantt Interativo (100% Nativo em React/SVG com drag e resize)
- *  2. Quadro Kanban Estilo Pipefy com Campos Customizados por Fase
- *  3. Diagrama de Rede PERT / CPM com Caminho Crítico
- *  4. Acompanhamento de Protocolos em Órgãos Públicos
- *  5. Vínculo de Entregáveis e Cálculo Inteligente de % Realizado
+ *  1. Visualização Multi-Tabelas Estilo ClickUp com Seleção de Colunas e Filtros
+ *  2. Sistema de Múltiplas Visualizações no Topo (+ Visualização)
+ *  3. Gráfico de Gantt Interativo (100% Nativo em React/SVG com drag e resize)
+ *  4. Quadro Kanban Estilo Pipefy com Campos Customizados por Fase
+ *  5. Diagrama de Rede PERT / CPM com Caminho Crítico
+ *  6. Acompanhamento de Protocolos em Órgãos Públicos
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
-import React, { useState, useEffect } from 'react'
-import {
-  Calendar,
-  Layers,
-  Kanban,
-  GitMerge,
-  Building2,
-  Sparkles,
-  Plus,
-} from 'lucide-react'
-import { PageHeader } from '../../components/ui'
+import React, { useState, useEffect, useMemo } from 'react'
 import { useApp } from '../../context/AppContext'
-import type { ScheduleTask, ProtocoloItem, CronogramaViewMode } from '../../types/cronograma'
+import type {
+  ScheduleTask,
+  ProtocoloItem,
+  CronogramaCustomView,
+} from '../../types/cronograma'
 import { getIncorporacaoTemplate, PROTOCOLOS_TEMPLATE } from '../../data/incorporacaoTemplate'
 import { recalculateSchedule } from '../../lib/dependencySchedule'
+
+// Componentes das Visualizações
+import CronogramaViewsHeader from '../../components/cronograma/Views/CronogramaViewsHeader'
+import CreateCustomViewModal from '../../components/cronograma/Views/CreateCustomViewModal'
+import MultiTableView from '../../components/cronograma/Table/MultiTableView'
 import GanttChart from '../../components/cronograma/Gantt/GanttChart'
 import KanbanBoard from '../../components/cronograma/Kanban/KanbanBoard'
 import NetworkDiagram from '../../components/cronograma/Network/NetworkDiagram'
@@ -33,18 +33,124 @@ import ProtocolosTracker from '../../components/cronograma/Protocolos/Protocolos
 import TaskDeliverablesModal from '../../components/cronograma/DeliverablesLink/TaskDeliverablesModal'
 import PipefyCardModal from '../../components/cronograma/Kanban/PipefyCardModal'
 
+const DEFAULT_VIEWS: CronogramaCustomView[] = [
+  {
+    id: 'view-equipe-int',
+    name: '👥 EQUIPE INT.',
+    format: 'tabela',
+    isDefault: true,
+    groupBy: 'tags',
+    visibleColumns: ['name', 'listName', 'startDate', 'endDate', 'tags', 'responsible', 'priority'],
+  },
+  {
+    id: 'view-isabele',
+    name: '👤 ISABELE',
+    format: 'tabela',
+    responsibleFilter: 'Isabele Caroline Tows',
+    isDefault: true,
+    groupBy: 'tags',
+    visibleColumns: ['name', 'listName', 'startDate', 'endDate', 'tags', 'responsible', 'priority'],
+  },
+  {
+    id: 'view-alana',
+    name: '👤 ALANA',
+    format: 'tabela',
+    responsibleFilter: 'Alana',
+    isDefault: true,
+    groupBy: 'tags',
+    visibleColumns: ['name', 'listName', 'startDate', 'endDate', 'tags', 'responsible', 'priority'],
+  },
+  {
+    id: 'view-bianca',
+    name: '👤 BIANCA',
+    format: 'tabela',
+    responsibleFilter: 'Bianca',
+    isDefault: true,
+    groupBy: 'tags',
+    visibleColumns: ['name', 'listName', 'startDate', 'endDate', 'tags', 'responsible', 'priority'],
+  },
+  {
+    id: 'view-thiago',
+    name: '👤 THIAGO',
+    format: 'tabela',
+    responsibleFilter: 'Thiago',
+    isDefault: true,
+    groupBy: 'tags',
+    visibleColumns: ['name', 'listName', 'startDate', 'endDate', 'tags', 'responsible', 'priority'],
+  },
+  {
+    id: 'view-viviane',
+    name: '👤 VIVIANE',
+    format: 'tabela',
+    responsibleFilter: 'Viviane',
+    isDefault: true,
+    groupBy: 'tags',
+    visibleColumns: ['name', 'listName', 'startDate', 'endDate', 'tags', 'responsible', 'priority'],
+  },
+  {
+    id: 'view-estrutura',
+    name: '📊 ESTRUTURA INT.',
+    format: 'tabela',
+    isDefault: true,
+    groupBy: 'listName',
+    visibleColumns: ['name', 'listName', 'startDate', 'endDate', 'tags', 'responsible', 'priority'],
+  },
+  {
+    id: 'view-gantt',
+    name: '📊 Gantt',
+    format: 'gantt',
+    isDefault: true,
+  },
+  {
+    id: 'view-kanban',
+    name: '▦ Quadro',
+    format: 'kanban',
+    isDefault: true,
+  },
+  {
+    id: 'view-network',
+    name: '🔀 Rede PERT',
+    format: 'network',
+    isDefault: true,
+  },
+  {
+    id: 'view-protocolos',
+    name: '🏛️ Protocolos',
+    format: 'protocolos',
+    isDefault: true,
+  },
+]
+
 export default function Cronograma() {
   const { currentProject } = useApp()
 
-  const [viewMode, setViewMode] = useState<CronogramaViewMode>('gantt')
+  // 1. Estado das Tarefas e Protocolos
   const [tasks, setTasks] = useState<ScheduleTask[]>([])
   const [protocolos, setProtocolos] = useState<ProtocoloItem[]>(PROTOCOLOS_TEMPLATE)
+
+  // 2. Estado das Visualizações Customizadas
+  const [views, setViews] = useState<CronogramaCustomView[]>(() => {
+    const savedViews = localStorage.getItem(`incor_cronograma_views_${currentProject.id}`)
+    if (savedViews) {
+      try {
+        const parsed = JSON.parse(savedViews)
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed
+      } catch { /* silence */ }
+    }
+    return DEFAULT_VIEWS
+  })
+
+  const [activeViewId, setActiveViewId] = useState<string>('view-isabele')
+  const [isCreateViewModalOpen, setIsCreateViewModalOpen] = useState(false)
+
+  // Modais de Detalhes
   const [selectedTaskForDeliverables, setSelectedTaskForDeliverables] = useState<ScheduleTask | null>(null)
   const [selectedTaskForPipefyModal, setSelectedTaskForPipefyModal] = useState<ScheduleTask | null>(null)
 
   // Local storage persistence por projeto
   const storageKeyTasks = `incor_cronograma_tasks_${currentProject.id}`
   const storageKeyProt = `incor_cronograma_prot_${currentProject.id}`
+  const storageKeyViews = `incor_cronograma_views_${currentProject.id}`
 
   useEffect(() => {
     try {
@@ -56,6 +162,20 @@ export default function Cronograma() {
           return
         }
       }
+
+      // Se não há tarefas salvas, carrega o template padrão
+      const templateTasks = getIncorporacaoTemplate('2026-05-04')
+      // Enriquece com dados de exemplo da Isabele / Equipe
+      const enriched = templateTasks.map((t, idx) => ({
+        ...t,
+        listName: idx % 3 === 0 ? 'ALTA' : idx % 3 === 1 ? 'NATUNE' : 'PROJETOS',
+        priority: idx % 4 === 0 ? ('urgente' as const) : idx % 4 === 1 ? ('alta' as const) : ('normal' as const),
+        tags: idx % 2 === 0 ? ['análise', 'equilíbrio'] : ['aprovação', 'equilíbrio'],
+        responsible: idx % 2 === 0 ? 'Isabele Caroline Tows' : (t.responsible || 'Thiago'),
+      }))
+
+      setTasks(recalculateSchedule(enriched))
+
       const savedProt = localStorage.getItem(storageKeyProt)
       if (savedProt) {
         const parsed = JSON.parse(savedProt)
@@ -83,194 +203,174 @@ export default function Cronograma() {
 
   const handleLoadTemplate = () => {
     const templateTasks = getIncorporacaoTemplate('2026-05-04')
-    handleTasksChange(templateTasks)
+    const enriched = templateTasks.map((t, idx) => ({
+      ...t,
+      listName: idx % 3 === 0 ? 'ALTA' : idx % 3 === 1 ? 'NATUNE' : 'PROJETOS',
+      priority: idx % 4 === 0 ? ('urgente' as const) : idx % 4 === 1 ? ('alta' as const) : ('normal' as const),
+      tags: idx % 2 === 0 ? ['análise', 'equilíbrio'] : ['aprovação', 'equilíbrio'],
+      responsible: idx % 2 === 0 ? 'Isabele Caroline Tows' : (t.responsible || 'Thiago'),
+    }))
+    handleTasksChange(enriched)
   }
 
-  const handleCreateBlank = () => {
-    const today = new Date().toISOString().split('T')[0]
-    const initial: ScheduleTask[] = [
-      {
-        id: 't-1',
-        wbs: '1',
-        name: 'Primeira Atividade do Projeto',
-        startDate: today,
-        endDate: today,
-        durationDays: 1,
-        progress: 0,
-        status: 'nao_iniciado',
-        responsible: 'Coordenador',
-        predecessors: [],
-        color: '#3B82F6',
-      },
-    ]
-    handleTasksChange(initial)
+  // Visualização Ativa
+  const activeView = useMemo(() => {
+    return views.find(v => v.id === activeViewId) || views[0]
+  }, [views, activeViewId])
+
+  // Adicionar Nova Visualização
+  const handleAddCustomView = (newView: CronogramaCustomView) => {
+    const updated = [...views, newView]
+    setViews(updated)
+    setActiveViewId(newView.id)
+    try {
+      localStorage.setItem(storageKeyViews, JSON.stringify(updated))
+    } catch { /* silence */ }
   }
+
+  // Excluir Visualização Customizada
+  const handleDeleteView = (viewId: string) => {
+    const updated = views.filter(v => v.id !== viewId)
+    setViews(updated)
+    if (activeViewId === viewId) {
+      setActiveViewId(updated[0]?.id || 'view-gantt')
+    }
+    try {
+      localStorage.setItem(storageKeyViews, JSON.stringify(updated))
+    } catch { /* silence */ }
+  }
+
+  // Lista de Responsáveis e Tags para o Modal de Criação de Visualizações
+  const availableResponsibles = useMemo(() => {
+    const set = new Set<string>()
+    tasks.forEach(t => {
+      if (t.responsible) set.add(t.responsible)
+    })
+    return Array.from(set)
+  }, [tasks])
+
+  const availableTags = useMemo(() => {
+    const set = new Set<string>()
+    tasks.forEach(t => {
+      t.tags?.forEach(tag => set.add(tag))
+    })
+    return Array.from(set)
+  }, [tasks])
 
   return (
-    <div className="h-full flex flex-col gap-3">
-      {/* Cabeçalho da Página */}
-      <PageHeader
-        title="Cronograma do Projeto"
-        subtitle={`Planejamento integrado de prazos, EAP, dependências de engenharia e aprovações legais • ${currentProject.name}`}
-        actions={
-          <div className="flex items-center gap-2">
-            {/* Abas de Visualização */}
-            <div className="flex items-center gap-1 bg-slate-900/90 p-1 rounded-2xl border border-slate-800 shadow-md">
-              <button
-                onClick={() => setViewMode('gantt')}
-                className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-xl transition-all cursor-pointer ${
-                  viewMode === 'gantt'
-                    ? 'bg-orange-500 text-white shadow-md shadow-orange-500/20'
-                    : 'text-slate-400 hover:text-white hover:bg-white/5'
-                }`}
-              >
-                <Calendar size={14} />
-                <span>Gantt</span>
-              </button>
-
-              <button
-                onClick={() => setViewMode('kanban')}
-                className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-xl transition-all cursor-pointer ${
-                  viewMode === 'kanban'
-                    ? 'bg-orange-500 text-white shadow-md shadow-orange-500/20'
-                    : 'text-slate-400 hover:text-white hover:bg-white/5'
-                }`}
-              >
-                <Kanban size={14} />
-                <span>Kanban (Pipefy)</span>
-              </button>
-
-              <button
-                onClick={() => setViewMode('network')}
-                className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-xl transition-all cursor-pointer ${
-                  viewMode === 'network'
-                    ? 'bg-orange-500 text-white shadow-md shadow-orange-500/20'
-                    : 'text-slate-400 hover:text-white hover:bg-white/5'
-                }`}
-              >
-                <GitMerge size={14} />
-                <span>Diagrama de Rede</span>
-              </button>
-
-              <button
-                onClick={() => setViewMode('protocolos')}
-                className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-xl transition-all cursor-pointer ${
-                  viewMode === 'protocolos'
-                    ? 'bg-orange-500 text-white shadow-md shadow-orange-500/20'
-                    : 'text-slate-400 hover:text-white hover:bg-white/5'
-                }`}
-              >
-                <Building2 size={14} />
-                <span>Protocolos ({protocolos.length})</span>
-              </button>
-            </div>
-          </div>
-        }
+    <div className="flex flex-col min-h-screen bg-slate-950">
+      {/* ── 1. Top Header de Múltiplas Visualizações (ClickUp Style) ─────────── */}
+      <CronogramaViewsHeader
+        projectName={`EQUILÍBRIO - ${currentProject.name.toUpperCase()}`}
+        views={views}
+        activeViewId={activeViewId}
+        onSelectView={setActiveViewId}
+        onAddView={() => setIsCreateViewModalOpen(true)}
+        onDeleteView={handleDeleteView}
       />
 
-      {/* Conteúdo Principal conforme ViewMode */}
-      <div className="flex-1 overflow-hidden">
-        {/* Caso 1: Cronograma em Branco (Empty State Inicial) */}
-        {tasks.length === 0 && viewMode !== 'protocolos' ? (
-          <div className="h-full flex flex-col items-center justify-center p-8 rounded-3xl border border-slate-800 bg-slate-900/60 text-center">
-            <div className="w-16 h-16 rounded-3xl bg-orange-500/10 border border-orange-500/30 flex items-center justify-center text-orange-400 mb-4 shadow-xl">
-              <Calendar size={32} />
-            </div>
+      {/* ── 2. Conteúdo da Visualização Selecionada ─────────────────────────── */}
+      <div className="flex-1 p-3 sm:p-5">
+        {activeView.format === 'tabela' && (
+          <MultiTableView
+            tasks={tasks}
+            view={activeView}
+            onUpdateTasks={handleTasksChange}
+            onOpenTaskDetails={setSelectedTaskForPipefyModal}
+            onAddTask={() => {
+              const today = new Date().toISOString().split('T')[0]
+              const newTask: ScheduleTask = {
+                id: `task-${Date.now()}`,
+                wbs: `${tasks.length + 1}`,
+                name: 'Nova Atividade',
+                startDate: today,
+                endDate: today,
+                durationDays: 1,
+                progress: 0,
+                status: 'nao_iniciado',
+                priority: 'normal',
+                responsible: activeView.responsibleFilter || 'Isabele Caroline Tows',
+                listName: 'ALTA',
+                tags: ['análise', 'equilíbrio'],
+                predecessors: [],
+              }
+              handleTasksChange([...tasks, newTask])
+            }}
+          />
+        )}
 
-            <h3 className="text-lg font-bold text-white mb-1">
-              Nenhum cronograma ativo neste empreendimento
-            </h3>
-            <p className="text-xs text-slate-400 max-w-md mb-6">
-              Comece carregando o template oficial de incorporação imobiliária ou crie as etapas da sua EAP do zero.
-            </p>
+        {activeView.format === 'gantt' && (
+          <GanttChart
+            tasks={tasks}
+            onTasksChange={handleTasksChange}
+            onLoadTemplate={handleLoadTemplate}
+            onOpenDeliverablesModal={setSelectedTaskForDeliverables}
+            onOpenPipefyModal={setSelectedTaskForPipefyModal}
+          />
+        )}
 
-            <div className="flex items-center gap-3 flex-wrap justify-center">
-              <button
-                onClick={handleLoadTemplate}
-                className="flex items-center gap-2 px-5 py-3 rounded-2xl text-xs font-bold text-white shadow-xl active:scale-95 transition-all cursor-pointer"
-                style={{ background: 'linear-gradient(135deg, var(--orange, #f97316), #c2410c)' }}
-              >
-                <Sparkles size={16} />
-                <span>Carregar Template de Incorporação</span>
-              </button>
+        {activeView.format === 'kanban' && (
+          <KanbanBoard
+            tasks={tasks}
+            onTasksChange={handleTasksChange}
+            onOpenDeliverablesModal={setSelectedTaskForDeliverables}
+          />
+        )}
 
-              <button
-                onClick={handleCreateBlank}
-                className="flex items-center gap-2 px-4 py-3 rounded-2xl text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition-colors cursor-pointer"
-              >
-                <Plus size={15} />
-                <span>Começar em Branco</span>
-              </button>
-            </div>
-          </div>
-        ) : (
-          <>
-            {/* View 1: Gantt Chart */}
-            {viewMode === 'gantt' && (
-              <GanttChart
-                tasks={tasks}
-                onTasksChange={handleTasksChange}
-                onLoadTemplate={handleLoadTemplate}
-                onOpenDeliverablesModal={task => setSelectedTaskForDeliverables(task)}
-                onOpenPipefyModal={task => setSelectedTaskForPipefyModal(task)}
-              />
-            )}
+        {activeView.format === 'network' && (
+          <NetworkDiagram
+            tasks={tasks}
+            onSelectTask={setSelectedTaskForPipefyModal}
+          />
+        )}
 
-            {/* View 2: Kanban Board (Pipefy Style) */}
-            {viewMode === 'kanban' && (
-              <KanbanBoard
-                tasks={tasks}
-                onTasksChange={handleTasksChange}
-                onOpenDeliverablesModal={task => setSelectedTaskForDeliverables(task)}
-              />
-            )}
-
-            {/* View 3: Network Diagram */}
-            {viewMode === 'network' && (
-              <NetworkDiagram
-                tasks={tasks}
-                onSelectTask={task => setSelectedTaskForPipefyModal(task)}
-              />
-            )}
-
-            {/* View 4: Protocolos & Órgãos */}
-            {viewMode === 'protocolos' && (
-              <ProtocolosTracker
-                protocolos={protocolos}
-                onProtocolosChange={handleProtocolosChange}
-              />
-            )}
-          </>
+        {activeView.format === 'protocolos' && (
+          <ProtocolosTracker
+            protocolos={protocolos}
+            onProtocolosChange={handleProtocolosChange}
+          />
         )}
       </div>
 
-      {/* Modal Pipefy de Detalhes da Tarefa (quando acionado do Gantt ou Rede) */}
-      {selectedTaskForPipefyModal && (
-        <PipefyCardModal
-          task={selectedTaskForPipefyModal}
-          allTasks={tasks}
-          onSave={updatedTask => {
-            const nextList = tasks.map(t => (t.id === updatedTask.id ? updatedTask : t))
-            handleTasksChange(recalculateSchedule(nextList))
-            setSelectedTaskForPipefyModal(null)
-          }}
-          onClose={() => setSelectedTaskForPipefyModal(null)}
-          onOpenDeliverablesModal={task => setSelectedTaskForDeliverables(task)}
-        />
-      )}
-
-      {/* Modal de Vínculo de Entregáveis de Projetos */}
+      {/* ── 3. Modais de Detalhes e Criação de Visualizações ─────────────────── */}
       {selectedTaskForDeliverables && (
         <TaskDeliverablesModal
           task={selectedTaskForDeliverables}
-          onSave={updatedTask => {
-            const nextList = tasks.map(t => t.id === updatedTask.id ? updatedTask : t)
-            handleTasksChange(recalculateSchedule(nextList))
+          onSave={(updatedTask: ScheduleTask) => {
+            handleTasksChange(
+              tasks.map(t => (t.id === updatedTask.id ? updatedTask : t))
+            )
             setSelectedTaskForDeliverables(null)
           }}
           onClose={() => setSelectedTaskForDeliverables(null)}
         />
       )}
+
+      {selectedTaskForPipefyModal && (
+        <PipefyCardModal
+          task={selectedTaskForPipefyModal}
+          allTasks={tasks}
+          onSave={(updatedTask: ScheduleTask) => {
+            handleTasksChange(
+              tasks.map(t => (t.id === updatedTask.id ? updatedTask : t))
+            )
+            setSelectedTaskForPipefyModal(null)
+          }}
+          onClose={() => setSelectedTaskForPipefyModal(null)}
+          onOpenDeliverablesModal={(task: ScheduleTask) => {
+            setSelectedTaskForPipefyModal(null)
+            setSelectedTaskForDeliverables(task)
+          }}
+        />
+      )}
+
+      <CreateCustomViewModal
+        isOpen={isCreateViewModalOpen}
+        onClose={() => setIsCreateViewModalOpen(false)}
+        onSave={handleAddCustomView}
+        availableResponsibles={availableResponsibles}
+        availableTags={availableTags}
+      />
     </div>
   )
 }

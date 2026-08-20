@@ -1,8 +1,10 @@
-/**
+﻿/**
  * types/cronograma.ts
  * ─────────────────────────────────────────────────────────────────────────────
  * Tipos e interfaces para o Módulo de Cronograma Avançado:
  *  - EAP / WBS e Gráfico de Gantt
+ *  - Visualização Multi-Tabelas estilo ClickUp com Seleção de Colunas e Filtros
+ *  - Múltiplas Visualizações Customizadas no Topo (+ Visualização)
  *  - Dependências (FS, SS, FF, SF com lag em dias úteis)
  *  - Caminho Crítico (PERT / CPM) e Baseline
  *  - Vínculo com Entregáveis de Projetos
@@ -25,6 +27,8 @@ export type TaskStatus =
   | 'em_revisao'
   | 'concluido'
   | 'bloqueado'
+
+export type TaskPriority = 'urgente' | 'alta' | 'normal' | 'baixa'
 
 export type CustomFieldType =
   | 'text'
@@ -85,7 +89,9 @@ export interface ScheduleTask {
   durationDays: number // Duração em dias úteis
   progress: number // 0 a 100%
   status: TaskStatus
+  priority?: TaskPriority // Prioridade da tarefa (Urgente, Alta, Normal, Baixa)
   responsible: string
+  listName?: string // Nome da lista / pacote / projeto (ex: "ALTA", "NATUNE", "PROJETOS")
   predecessors: TaskDependency[]
   successors?: string[]
 
@@ -95,7 +101,7 @@ export interface ScheduleTask {
   baselineDuration?: number
 
   // Visual e Organização
-  tags?: string[]
+  tags?: string[] // Etiquetas (ex: ["análise", "equilíbrio", "aprovação"])
   color?: string
   isGroup?: boolean // true para fases, lotes e pacotes sumários
   parentId?: string | null
@@ -121,6 +127,53 @@ export interface ScheduleTask {
   lateFinish?: string
   totalFloat?: number // Folga total em dias úteis
   freeFloat?: number // Folga livre
+}
+
+// ─── Visualizações Customizadas & Tabelas ──────────────────────────────────
+
+export type ViewFormat = 'tabela' | 'gantt' | 'kanban' | 'network' | 'protocolos' | 'timeline'
+
+export type TableGroupBy = 'tags' | 'status' | 'responsible' | 'listName' | 'none'
+
+export interface TableColumnConfig {
+  id: string
+  key: string
+  label: string
+  visible: boolean
+  width?: number
+  sortable?: boolean
+}
+
+export interface TableGroupSection {
+  id: string
+  title: string
+  tagFilter?: string
+  statusFilter?: TaskStatus
+  responsibleFilter?: string
+  listFilter?: string
+  collapsed?: boolean
+}
+
+export interface CronogramaCustomView {
+  id: string
+  name: string
+  icon?: string
+  format: ViewFormat
+  isDefault?: boolean
+  responsibleFilter?: string // Ex: apenas tarefas da Isabele, Alana, etc.
+  tagFilter?: string // Ex: apenas tarefas com tag [equilíbrio]
+  groupBy?: TableGroupBy
+  visibleColumns?: string[] // IDs das colunas ativas
+  sortColumn?: string
+  sortDirection?: 'asc' | 'desc'
+  filters?: {
+    tags?: string[]
+    status?: TaskStatus[]
+    responsible?: string[]
+    priority?: TaskPriority[]
+    searchQuery?: string
+  }
+  customSections?: TableGroupSection[]
 }
 
 // ─── Protocolos & Órgãos Públicos ──────────────────────────────────────────
@@ -167,4 +220,4 @@ export interface ProtocoloItem {
   observacoes?: string
 }
 
-export type CronogramaViewMode = 'gantt' | 'kanban' | 'network' | 'protocolos'
+export type CronogramaViewMode = 'tabela' | 'gantt' | 'kanban' | 'network' | 'protocolos' | string
