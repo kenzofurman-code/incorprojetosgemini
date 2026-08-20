@@ -57,6 +57,12 @@ export default function GanttChart({
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null)
   const [activeConnecting, setActiveConnecting] = useState<ActiveConnectingState | null>(null)
 
+  // Modo de permitir folgas livres vs puxar sem folga (JIT)
+  const [allowSlack, setAllowSlack] = useState<boolean>(() => {
+    const saved = localStorage.getItem('incor_gantt_allow_slack')
+    return saved !== null ? saved === 'true' : true
+  })
+
   // Largura da tabela da esquerda com persistência
   const [tableWidth, setTableWidth] = useState<number>(() => {
     const saved = localStorage.getItem('incor_gantt_table_width')
@@ -179,10 +185,25 @@ export default function GanttChart({
     return list
   }, [tasks, showCriticalOnly])
 
-  // Atualização de tarefa individual
+  // Atualização de tarefa individual respeitando allowSlack
   const handleTaskUpdate = (updatedTask: ScheduleTask) => {
-    const nextList = tasks.map(t => t.id === updatedTask.id ? updatedTask : t)
-    const recalculated = recalculateSchedule(nextList)
+    const nextList = tasks.map(t => (t.id === updatedTask.id ? updatedTask : t))
+    const recalculated = recalculateSchedule(nextList, {
+      allowSlack,
+      pinnedTaskId: updatedTask.id,
+    })
+    onTasksChange(recalculated)
+  }
+
+  // Alterna entre permitir folgas livres e modo puxado (sem folgas)
+  const handleToggleAllowSlack = () => {
+    const nextVal = !allowSlack
+    setAllowSlack(nextVal)
+    try {
+      localStorage.setItem('incor_gantt_allow_slack', String(nextVal))
+    } catch { /* silence */ }
+
+    const recalculated = recalculateSchedule(tasks, { allowSlack: nextVal })
     onTasksChange(recalculated)
   }
 
@@ -301,7 +322,7 @@ export default function GanttChart({
 
   // Recalcular Cronograma Completo
   const handleRecalculate = () => {
-    onTasksChange(recalculateSchedule(tasks))
+    onTasksChange(recalculateSchedule(tasks, { allowSlack }))
   }
 
   // Exportar para CSV
@@ -346,7 +367,7 @@ export default function GanttChart({
       try {
         const parsed = JSON.parse(evt.target?.result as string)
         if (Array.isArray(parsed)) {
-          onTasksChange(recalculateSchedule(parsed))
+          onTasksChange(recalculateSchedule(parsed, { allowSlack }))
           alert('Cronograma importado com sucesso!')
         }
       } catch (err) {
@@ -390,6 +411,8 @@ export default function GanttChart({
         onLoadTemplate={onLoadTemplate}
         showCriticalOnly={showCriticalOnly}
         onToggleCriticalOnly={() => setShowCriticalOnly(p => !p)}
+        allowSlack={allowSlack}
+        onToggleAllowSlack={handleToggleAllowSlack}
         onExportCSV={handleExportCSV}
         onExportJSON={handleExportJSON}
         onImportJSON={handleImportJSON}

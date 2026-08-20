@@ -25,6 +25,7 @@ import {
   Upload,
   FolderPlus,
   Sparkles,
+  SlidersHorizontal,
 } from 'lucide-react'
 import type { GanttZoomLevel } from './GanttHeader'
 
@@ -38,6 +39,8 @@ interface GanttToolbarProps {
   onLoadTemplate: () => void
   showCriticalOnly: boolean
   onToggleCriticalOnly: () => void
+  allowSlack: boolean
+  onToggleAllowSlack: () => void
   onExportCSV: () => void
   onExportJSON: () => void
   onImportJSON: (e: React.ChangeEvent<HTMLInputElement>) => void
@@ -53,6 +56,8 @@ export default function GanttToolbar({
   onLoadTemplate,
   showCriticalOnly,
   onToggleCriticalOnly,
+  allowSlack,
+  onToggleAllowSlack,
   onExportCSV,
   onExportJSON,
   onImportJSON,
@@ -112,6 +117,24 @@ export default function GanttToolbar({
         >
           <Flame size={13} className="text-red-400" />
           <span>Caminho Crítico</span>
+        </button>
+
+        {/* Botão de Permitir Folgas / Modo Puxado */}
+        <button
+          onClick={onToggleAllowSlack}
+          className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold rounded-xl border transition-all cursor-pointer ${
+            allowSlack
+              ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40 shadow-sm'
+              : 'bg-blue-500/20 text-blue-300 border-blue-500/40 shadow-sm'
+          }`}
+          title={
+            allowSlack
+              ? 'Permitir Folgas: ATIVO (Permite arrastar tarefas para frente mantendo folgas entre as dependências)'
+              : 'Permitir Folgas: DESATIVADO (Modo Puxado: Ao mover, todas as tarefas sucessoras para frente são puxadas para a menor data possível)'
+          }
+        >
+          <SlidersHorizontal size={13} className={allowSlack ? 'text-emerald-400' : 'text-blue-400'} />
+          <span>{allowSlack ? 'Folgas Permitidas' : 'Sem Folgas (Puxar)'}</span>
         </button>
 
         <button

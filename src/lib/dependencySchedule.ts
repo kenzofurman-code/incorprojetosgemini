@@ -2,11 +2,11 @@
  * lib/dependencySchedule.ts
  * ─────────────────────────────────────────────────────────────────────────────
  * Motor de Cálculo de Dependências, EAP e CPM (Critical Path Method).
- * Suporta as 4 relações do MS Project (em Português e Inglês):
- *  - FS / TI: Término para Início (Finish-to-Start)
- *  - SS / II: Início para Início (Start-to-Start)
- *  - FF / TT: Término para Término (Finish-to-Finish)
- *  - SF / IT: Início para Término (Start-to-Finish)
+ * Suporta:
+ *  - 4 relações do MS Project (FS/TI, SS/II, FF/TT, SF/IT) em Português e Inglês
+ *  - Modo com Folgas Permitidas (Permite arrastar tarefas para frente mantendo folga)
+ *  - Modo Puxado / Sem Folgas (Elimina folgas puxando sucessoras para a menor data possível)
+ *  - Cálculo do Caminho Crítico (CPM) e Rollup Dinâmico de Grupos
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
@@ -15,7 +15,6 @@ import {
   addBusinessDays,
   diffBusinessDays,
   parseDate,
-  formatDateISO,
 } from './businessCalendar'
 
 /** Mapeamento de tipos em português para o tipo canônico */
@@ -78,11 +77,24 @@ export function formatPredecessorsString(predecessors: TaskDependency[], allTask
     .join(', ')
 }
 
+export interface RecalculateOptions {
+  allowSlack?: boolean
+  pinnedTaskId?: string
+}
+
 /**
  * Recalcula todas as datas da EAP topologicamente a partir das predecessoras
- * e faz o rollup rigoroso das fases/grupos pais a partir do início e fim de suas tarefas filhas.
+ * e faz o rollup rigoroso das fases/grupos pais.
+ *
+ * @param tasks Lista de tarefas
+ * @param options.allowSlack Se true, permite folgas livres; se false, puxa as sucessoras para a menor data possível
+ * @param options.pinnedTaskId ID da tarefa movida manualmente que deve manter sua data
  */
-export function recalculateSchedule(tasks: ScheduleTask[]): ScheduleTask[] {
+export function recalculateSchedule(
+  tasks: ScheduleTask[],
+  options: RecalculateOptions = {}
+): ScheduleTask[] {
+  const { allowSlack = true, pinnedTaskId } = options
   const taskMap = new Map<string, ScheduleTask>()
   tasks.forEach(t => taskMap.set(t.id, { ...t }))
 
@@ -98,14 +110,14 @@ export function recalculateSchedule(tasks: ScheduleTask[]): ScheduleTask[] {
     for (const task of taskMap.values()) {
       if (task.isGroup || !task.predecessors || task.predecessors.length === 0) continue
 
-      let maxRequiredStart = task.startDate
+      let maxRequiredStart = '1970-01-01'
 
       for (const dep of task.predecessors) {
         const pred = taskMap.get(dep.taskId) || Array.from(taskMap.values()).find(t => t.wbs === dep.taskId)
         if (!pred) continue
 
         const lag = dep.lagDays || 0
-        let candidateStart = task.startDate
+        let candidateStart = pred.startDate
 
         switch (dep.type) {
           case 'FS': // Término para Início: Começa X dias úteis após o término da predecessora
@@ -131,10 +143,33 @@ export function recalculateSchedule(tasks: ScheduleTask[]): ScheduleTask[] {
         }
       }
 
-      if (maxRequiredStart !== task.startDate) {
-        task.startDate = maxRequiredStart
-        task.endDate = addBusinessDays(maxRequiredStart, Math.max(1, task.durationDays) - 1)
-        changed = true
+      if (maxRequiredStart === '1970-01-01') continue
+
+      if (allowSlack) {
+        // Modo com Folgas:
+        // Apenas empurra para frente se a data mínima requerida for superior ao início atual
+        if (parseDate(maxRequiredStart).getTime() > parseDate(task.startDate).getTime()) {
+          task.startDate = maxRequiredStart
+          task.endDate = addBusinessDays(maxRequiredStart, Math.max(1, task.durationDays) - 1)
+          changed = true
+        }
+      } else {
+        // Modo Puxado / Sem Folgas (Just-in-Time):
+        // Se for a tarefa arrastada manualmente (pinnedTaskId), mantém a data escolhida
+        if (task.id === pinnedTaskId) {
+          if (parseDate(maxRequiredStart).getTime() > parseDate(task.startDate).getTime()) {
+            task.startDate = maxRequiredStart
+            task.endDate = addBusinessDays(maxRequiredStart, Math.max(1, task.durationDays) - 1)
+            changed = true
+          }
+        } else {
+          // Puxa para a menor data possível
+          if (task.startDate !== maxRequiredStart) {
+            task.startDate = maxRequiredStart
+            task.endDate = addBusinessDays(maxRequiredStart, Math.max(1, task.durationDays) - 1)
+            changed = true
+          }
+        }
       }
     }
   }
