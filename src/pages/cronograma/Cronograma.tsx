@@ -67,9 +67,10 @@ export default function Cronograma() {
   }, [currentProject.id])
 
   const handleTasksChange = (newTasks: ScheduleTask[]) => {
-    setTasks(newTasks)
+    const recalculated = recalculateSchedule(newTasks)
+    setTasks(recalculated)
     try {
-      localStorage.setItem(storageKeyTasks, JSON.stringify(newTasks))
+      localStorage.setItem(storageKeyTasks, JSON.stringify(recalculated))
     } catch { /* silence */ }
   }
 

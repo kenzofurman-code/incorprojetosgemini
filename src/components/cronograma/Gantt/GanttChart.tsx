@@ -10,7 +10,7 @@
  */
 
 import React, { useRef, useMemo, useState } from 'react'
-import type { ScheduleTask } from '../../../types/cronograma'
+import type { ScheduleTask, DependencyType } from '../../../types/cronograma'
 import {
   parseDate,
   formatDateISO,
@@ -20,7 +20,7 @@ import {
 import { recalculateSchedule } from '../../../lib/dependencySchedule'
 import GanttHeader, { type GanttZoomLevel, ZOOM_PX_PER_DAY } from './GanttHeader'
 import GanttTable, { type GanttColumnId } from './GanttTable'
-import GanttTimeline from './GanttTimeline'
+import GanttTimeline, { type ActiveConnectingState } from './GanttTimeline'
 import GanttDependencySvg from './GanttDependencySvg'
 import GanttToolbar from './GanttToolbar'
 
@@ -55,6 +55,7 @@ export default function GanttChart({
   const [zoom, setZoom] = useState<GanttZoomLevel>(2)
   const [showCriticalOnly, setShowCriticalOnly] = useState(false)
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null)
+  const [activeConnecting, setActiveConnecting] = useState<ActiveConnectingState | null>(null)
 
   // Largura da tabela da esquerda com persistência
   const [tableWidth, setTableWidth] = useState<number>(() => {
@@ -176,8 +177,29 @@ export default function GanttChart({
   }, [tasks, showCriticalOnly])
 
   // Atualização de tarefa individual
+  // Atualização de tarefa individual
   const handleTaskUpdate = (updatedTask: ScheduleTask) => {
     const nextList = tasks.map(t => t.id === updatedTask.id ? updatedTask : t)
+    const recalculated = recalculateSchedule(nextList)
+    onTasksChange(recalculated)
+  }
+
+  // Adiciona nova dependência interativa por arrasto
+  const handleAddDependency = (predTaskId: string, succTaskId: string, type: DependencyType = 'FS') => {
+    if (predTaskId === succTaskId) return
+
+    const nextList = tasks.map(t => {
+      if (t.id === succTaskId) {
+        const existing = t.predecessors || []
+        const withoutOld = existing.filter(p => p.taskId !== predTaskId && p.taskId !== t.wbs)
+        return {
+          ...t,
+          predecessors: [...withoutOld, { taskId: predTaskId, type, lagDays: 0 }],
+        }
+      }
+      return t
+    })
+
     const recalculated = recalculateSchedule(nextList)
     onTasksChange(recalculated)
   }
@@ -432,6 +454,7 @@ export default function GanttChart({
               totalDays={totalDays}
               zoom={zoom}
               totalHeight={visibleTasks.length * 36}
+              activeConnecting={activeConnecting}
             />
 
             {/* Barras de Tarefas Interativas */}
@@ -444,6 +467,8 @@ export default function GanttChart({
               onTaskUpdate={handleTaskUpdate}
               onTaskSelect={handleSelectTask}
               onOpenPipefyModal={onOpenPipefyModal}
+              onAddDependency={handleAddDependency}
+              onConnectingChange={setActiveConnecting}
             />
           </div>
         </div>

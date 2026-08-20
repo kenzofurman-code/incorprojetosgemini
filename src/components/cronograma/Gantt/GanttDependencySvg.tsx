@@ -1,9 +1,8 @@
 /**
  * GanttDependencySvg.tsx
  * ─────────────────────────────────────────────────────────────────────────────
- * Camada SVG Nativa para Renderização da Grade e Setas de Dependência.
- * Traça conexões ortogonais centralizadas verticalmente com as barras de origem
- * e destino, com destaque em vermelho para o Caminho Crítico.
+ * Camada SVG Nativa para Renderização das Setas de Dependência (FS, SS, FF, SF)
+ * e Linha de Conexão Interativa ao Arrastar.
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
@@ -12,6 +11,15 @@ import type { ScheduleTask } from '../../../types/cronograma'
 import { diffCalendarDays, parseDate, formatDateISO } from '../../../lib/businessCalendar'
 import { ZOOM_PX_PER_DAY, type GanttZoomLevel } from './GanttHeader'
 
+interface ActiveConnectingState {
+  fromTaskId: string
+  fromX: number
+  fromY: number
+  toX: number
+  toY: number
+  hoveredTargetTaskId: string | null
+}
+
 interface GanttDependencySvgProps {
   tasks: ScheduleTask[]
   visibleTasks: ScheduleTask[]
@@ -19,6 +27,7 @@ interface GanttDependencySvgProps {
   totalDays: number
   zoom: GanttZoomLevel
   totalHeight: number
+  activeConnecting?: ActiveConnectingState | null
 }
 
 export default function GanttDependencySvg({
@@ -27,6 +36,7 @@ export default function GanttDependencySvg({
   totalDays,
   zoom,
   totalHeight,
+  activeConnecting,
 }: GanttDependencySvgProps) {
   const pxPerDay = ZOOM_PX_PER_DAY[zoom]
   const totalWidth = totalDays * pxPerDay
@@ -43,11 +53,15 @@ export default function GanttDependencySvg({
     return null
   }, [minDate, todayStr, totalDays, pxPerDay])
 
-  // Calcula trajetos das setas de dependência perfeitamente centralizadas
+  // Calcula trajetos das setas de dependência (suporta FS, SS, FF, SF)
   const dependencyPaths = useMemo(() => {
     const paths: { id: string; d: string; critical: boolean }[] = []
     const taskIndexMap = new Map<string, number>()
-    visibleTasks.forEach((t, i) => taskIndexMap.set(t.id, i))
+
+    visibleTasks.forEach((t, i) => {
+      taskIndexMap.set(t.id, i)
+      if (t.wbs) taskIndexMap.set(t.wbs, i)
+    })
 
     for (const succ of visibleTasks) {
       if (!succ.predecessors || succ.predecessors.length === 0) continue
@@ -55,8 +69,9 @@ export default function GanttDependencySvg({
       const succIdx = taskIndexMap.get(succ.id)
       if (succIdx === undefined) continue
 
-      const succX = diffCalendarDays(minDate, succ.startDate) * pxPerDay
-      // Centro vertical da barra: linha * 36 + 16 (offset 6 + metade de 20 = 16)
+      const succStartX = diffCalendarDays(minDate, succ.startDate) * pxPerDay
+      const succSpan = diffCalendarDays(succ.startDate, succ.endDate) + 1
+      const succEndX = (diffCalendarDays(minDate, succ.startDate) + succSpan) * pxPerDay
       const succY = succIdx * 36 + 16
 
       for (const dep of succ.predecessors) {
@@ -64,29 +79,59 @@ export default function GanttDependencySvg({
         if (predIdx === undefined) continue
 
         const pred = visibleTasks[predIdx]
-        const predX = (diffCalendarDays(minDate, pred.endDate) + 1) * pxPerDay
+        const predStartX = diffCalendarDays(minDate, pred.startDate) * pxPerDay
+        const predSpan = diffCalendarDays(pred.startDate, pred.endDate) + 1
+        const predEndX = (diffCalendarDays(minDate, pred.startDate) + predSpan) * pxPerDay
         const predY = predIdx * 36 + 16
 
         const isCritical = Boolean(succ.critical && pred.critical)
+        const type = dep.type || 'FS'
 
-        // Traçado ortogonal inteligente (Finish-to-Start)
+        let startX = predEndX
+        let startY = predY
+        let targetX = succStartX
+        let targetY = succY
+
+        if (type === 'SS') {
+          startX = predStartX
+          targetX = succStartX
+        } else if (type === 'FF') {
+          startX = predEndX
+          targetX = succEndX
+        } else if (type === 'SF') {
+          startX = predStartX
+          targetX = succEndX
+        }
+
         let d = ''
-        const deltaX = succX - predX
+        const deltaX = targetX - startX
 
-        if (deltaX >= 16) {
-          // Sucessora está à direita com folga: curva S suave
-          const midX = predX + deltaX / 2
-          d = `M ${predX} ${predY} L ${midX} ${predY} L ${midX} ${succY} L ${succX - 4} ${succY}`
+        if (type === 'FS') {
+          if (deltaX >= 12) {
+            const midX = startX + deltaX / 2
+            d = `M ${startX} ${startY} L ${midX} ${startY} L ${midX} ${targetY} L ${targetX - 4} ${targetY}`
+          } else {
+            const offsetRight = startX + 12
+            const midY = startY < targetY ? startY + 18 : startY - 18
+            const offsetLeft = targetX - 12
+            d = `M ${startX} ${startY} L ${offsetRight} ${startY} L ${offsetRight} ${midY} L ${offsetLeft} ${midY} L ${offsetLeft} ${targetY} L ${targetX - 4} ${targetY}`
+          }
+        } else if (type === 'SS') {
+          const offsetLeft = Math.min(startX, targetX) - 12
+          d = `M ${startX} ${startY} L ${offsetLeft} ${startY} L ${offsetLeft} ${targetY} L ${targetX - 4} ${targetY}`
+        } else if (type === 'FF') {
+          const offsetRight = Math.max(startX, targetX) + 12
+          d = `M ${startX} ${startY} L ${offsetRight} ${startY} L ${offsetRight} ${targetY} L ${targetX + 4} ${targetY}`
         } else {
-          // Sucessora está alinhada ou à esquerda: contorna por trás
-          const offsetRight = predX + 12
-          const midY = predY < succY ? predY + 18 : predY - 18
-          const offsetLeft = succX - 12
-          d = `M ${predX} ${predY} L ${offsetRight} ${predY} L ${offsetRight} ${midY} L ${offsetLeft} ${midY} L ${offsetLeft} ${succY} L ${succX - 4} ${succY}`
+          // SF
+          const offsetLeft = startX - 12
+          const offsetRight = targetX + 12
+          const midY = startY < targetY ? startY + 18 : startY - 18
+          d = `M ${startX} ${startY} L ${offsetLeft} ${startY} L ${offsetLeft} ${midY} L ${offsetRight} ${midY} L ${offsetRight} ${targetY} L ${targetX + 4} ${targetY}`
         }
 
         paths.push({
-          id: `${pred.id}->${succ.id}`,
+          id: `${pred.id}->${succ.id}-${type}`,
           d,
           critical: isCritical,
         })
@@ -98,11 +143,10 @@ export default function GanttDependencySvg({
 
   return (
     <svg
-      className="absolute inset-0 pointer-events-none z-0"
-      style={{ width: totalWidth, height: totalHeight }}
+      className="absolute inset-0 pointer-events-none z-10"
+      style={{ width: totalWidth, height: Math.max(totalHeight, 300) }}
     >
       <defs>
-        {/* Marcador de seta normal (cinza/ardósia) */}
         <marker
           id="gantt-arrow-normal"
           viewBox="0 0 10 10"
@@ -115,7 +159,6 @@ export default function GanttDependencySvg({
           <path d="M 0 1 L 8 5 L 0 9 z" fill="#94a3b8" />
         </marker>
 
-        {/* Marcador de seta crítica (vermelho/laranja) */}
         <marker
           id="gantt-arrow-critical"
           viewBox="0 0 10 10"
@@ -126,6 +169,18 @@ export default function GanttDependencySvg({
           orient="auto-start-reverse"
         >
           <path d="M 0 1 L 8 5 L 0 9 z" fill="#ef4444" />
+        </marker>
+
+        <marker
+          id="gantt-arrow-connecting"
+          viewBox="0 0 10 10"
+          refX="6"
+          refY="5"
+          markerWidth="7"
+          markerHeight="7"
+          orient="auto-start-reverse"
+        >
+          <path d="M 0 1 L 8 5 L 0 9 z" fill="#f97316" />
         </marker>
       </defs>
 
@@ -145,7 +200,7 @@ export default function GanttDependencySvg({
         </g>
       )}
 
-      {/* Setas de dependência */}
+      {/* Setas de dependência existentes */}
       {dependencyPaths.map(p => (
         <path
           key={p.id}
@@ -153,10 +208,31 @@ export default function GanttDependencySvg({
           fill="none"
           stroke={p.critical ? '#ef4444' : '#94a3b8'}
           strokeWidth={p.critical ? 2 : 1.5}
-          strokeOpacity={p.critical ? 0.95 : 0.75}
+          strokeOpacity={p.critical ? 0.95 : 0.8}
           markerEnd={p.critical ? 'url(#gantt-arrow-critical)' : 'url(#gantt-arrow-normal)'}
         />
       ))}
+
+      {/* Seta Dinâmica de Conexão sendo Arrastada pelo Usuário */}
+      {activeConnecting && (
+        <g>
+          <path
+            d={`M ${activeConnecting.fromX} ${activeConnecting.fromY} C ${(activeConnecting.fromX + activeConnecting.toX) / 2} ${activeConnecting.fromY}, ${(activeConnecting.fromX + activeConnecting.toX) / 2} ${activeConnecting.toY}, ${activeConnecting.toX} ${activeConnecting.toY}`}
+            fill="none"
+            stroke="#f97316"
+            strokeWidth="2.5"
+            strokeDasharray="4 3"
+            markerEnd="url(#gantt-arrow-connecting)"
+            className="animate-pulse"
+          />
+          <circle
+            cx={activeConnecting.fromX}
+            cy={activeConnecting.fromY}
+            r="4"
+            fill="#f97316"
+          />
+        </g>
+      )}
     </svg>
   )
 }
