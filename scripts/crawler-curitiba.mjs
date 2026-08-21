@@ -321,10 +321,67 @@ async function runMainCrawler() {
       historicoCompletoDeMovimentacoes: historico,
     }
 
+    // ── 4. Download Automático de Todas as Fotos e Documentos ───────────────
+    console.log('\n📥 INICIANDO DOWNLOAD DAS FOTOS E DOCUMENTOS DO PROCESSO:')
+    const downloadDir = path.resolve('downloads', 'processo_curitiba')
+    if (!fs.existsSync(downloadDir)) {
+      fs.mkdirSync(downloadDir, { recursive: true })
+    }
+
+    let totalBaixados = 0
+
+    // Download de Anexos Oficiais (Guias, Pranchas e PDFs)
+    for (const anexo of anexosGerais) {
+      try {
+        if (anexo.urlDownload) {
+          const safeName = anexo.nome.replace(/[/\\?%*:|"<>]/g, '_')
+          const destPath = path.join(downloadDir, safeName)
+          console.log(`   ⬇️ Baixando documento: ${anexo.nome}...`)
+
+          const fileRes = await page.request.get(anexo.urlDownload)
+          if (fileRes.ok()) {
+            const buf = await fileRes.body()
+            fs.writeFileSync(destPath, buf)
+            totalBaixados++
+            console.log(`   ✅ Salvo em: downloads/processo_curitiba/${safeName} (${Math.round(buf.length / 1024)} KB)`)
+          }
+        }
+      } catch (err) {
+        console.log(`   ⚠️ Não foi possível baixar ${anexo.nome}: ${err.message}`)
+      }
+    }
+
+    // Download de Links encontrados nos Subdados
+    for (const sub of subdadosAcoes) {
+      if (Array.isArray(sub.linksDocumentos)) {
+        for (const docLink of sub.linksDocumentos) {
+          try {
+            if (docLink.url && (docLink.url.includes('/_get/') || docLink.url.includes('.pdf') || docLink.url.includes('.jpg') || docLink.url.includes('.png'))) {
+              const safeName = (docLink.texto || 'arquivo_' + Date.now()).replace(/[/\\?%*:|"<>]/g, '_') + '.pdf'
+              const destPath = path.join(downloadDir, safeName)
+              
+              if (!fs.existsSync(destPath)) {
+                console.log(`   ⬇️ Baixando arquivo do formulário: ${safeName}...`)
+                const fileRes = await page.request.get(docLink.url)
+                if (fileRes.ok()) {
+                  const buf = await fileRes.body()
+                  fs.writeFileSync(destPath, buf)
+                  totalBaixados++
+                  console.log(`   ✅ Salvo em: downloads/processo_curitiba/${safeName}`)
+                }
+              }
+            }
+          } catch {}
+        }
+      }
+    }
+
+    console.log(`\n🎉 Downloads concluídos: ${totalBaixados} arquivo(s) e foto(s) salvos na pasta "downloads/processo_curitiba/"!`)
+
     // Salvar JSON Oficial Completo
     const jsonPath = 'scripts/curitiba-dados-completos.json'
     fs.writeFileSync(jsonPath, JSON.stringify(relatorioFinal, null, 2), 'utf-8')
-    console.log(`\n💾 JSON oficial completo salvo em: ${jsonPath}`)
+    console.log(`💾 JSON oficial completo salvo em: ${jsonPath}`)
 
     // Salvar Screenshot
     await page.screenshot({ path: 'scripts/curitiba-processo-completo.png', fullPage: true })
@@ -336,6 +393,7 @@ async function runMainCrawler() {
     console.log(`• Pendências em Aberto: ${relatorioFinal.resumoGeral.totalPendenciasAbertas}`)
     console.log(`• Subdados de Ações extraídos: ${relatorioFinal.resumoGeral.totalAcoesComSubdadosCapturados}`)
     console.log(`• Documentos PDF com links: ${relatorioFinal.resumoGeral.totalDocumentosPdfAnexados}`)
+    console.log(`• Pasta local de downloads: downloads/processo_curitiba/`)
 
   } catch (error) {
     console.error('❌ Erro durante a execução:', error)
