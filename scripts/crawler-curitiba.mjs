@@ -1,12 +1,11 @@
 ﻿/**
  * scripts/crawler-curitiba.mjs
  * ─────────────────────────────────────────────────────────────────────────────
- * Robô Oficial de Extração Profunda - Prefeitura de Curitiba (PMC / SYDLE ONE)
- * Extrai 100% dos dados estruturados:
- *  - Dados do Processo (CVCO, Alvará, Requerente, Código de Busca)
- *  - Histórico Cronológico de Despachos da SMU / SMMA / UCE
- *  - Lista de Pendências e Exigências (Resolvidas e Em Aberto com Prazos)
- *  - Documentos e Guias em PDF anexados
+ * Robô Oficial de Extração Profunda & Subdados - Prefeitura de Curitiba (PMC / SYDLE)
+ *  - Extrai os Dados Principais do Processo
+ *  - Interage e clica em CADA botão de "Visualizar", "Visualizar documento(s)" e "Atender"
+ *  - Extrai os subdados dos formulários e modais
+ *  - Gera relatório JSON consolidado completo e screenshots
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
@@ -44,9 +43,9 @@ const IS_HEADLESS = env.HEADLESS !== 'false'
 
 const SESSION_FILE = 'scripts/session-curitiba.json'
 
-async function runOfficialCrawler() {
+async function runFullCrawler() {
   console.log('═══════════════════════════════════════════════════════════════')
-  console.log('🏛️ ROBÔ PMC - EXTRAÇÃO PROFUNDA DE DADOS E PENDÊNCIAS (CVCO)')
+  console.log('🏛️ ROBÔ PMC - EXTRAÇÃO PROFUNDA COM SUBDADOS & MODAIS')
   console.log('═══════════════════════════════════════════════════════════════')
 
   const browser = await chromium.launch({
@@ -56,7 +55,7 @@ async function runOfficialCrawler() {
 
   let context
   if (fs.existsSync(SESSION_FILE)) {
-    console.log('🔑 Carregando sessão de login salva...')
+    console.log('🔑 Carregando sessão autenticada...')
     try {
       context = await browser.newContext({ storageState: SESSION_FILE, viewport: { width: 1440, height: 1000 } })
     } catch {
@@ -68,20 +67,15 @@ async function runOfficialCrawler() {
 
   const page = await context.newPage()
 
-  // 1. Interceptar as APIs oficiais do SYDLE ONE em tempo real
-  const capturedApis = {}
-
-  page.on('response', async (response) => {
-    const url = response.url()
+  // 1. Interceptar chamadas de API do SYDLE em background
+  const apiResponses = {}
+  page.on('response', async (res) => {
+    const url = res.url()
     try {
-      if (url.includes('showTicketInfo')) {
-        capturedApis.ticketInfo = await response.json()
-      } else if (url.includes('getTicketComments')) {
-        capturedApis.comments = await response.json()
-      } else if (url.includes('getCards')) {
-        capturedApis.cards = await response.json()
-      }
-    } catch { /* ignore */ }
+      if (url.includes('showTicketInfo')) apiResponses.ticketInfo = await res.json()
+      if (url.includes('getTicketComments')) apiResponses.comments = await res.json()
+      if (url.includes('getCards')) apiResponses.cards = await res.json()
+    } catch {}
   })
 
   try {
@@ -91,7 +85,7 @@ async function runOfficialCrawler() {
 
     // Se precisar autenticar
     if (page.url().includes('autenticacao-ecidadao') || page.url().includes('/login')) {
-      console.log('🔒 Fazendo login no e-Cidadão com CPF e Senha...')
+      console.log('🔒 Fazendo login no e-Cidadão...')
 
       const btnCpfSelector = 'button:has-text("Entrar com CPF"), #btnEntrarCPF, a:has-text("Entrar com CPF")'
       await page.waitForSelector(btnCpfSelector, { state: 'visible', timeout: 30000 })
@@ -118,7 +112,7 @@ async function runOfficialCrawler() {
       try {
         await context.storageState({ path: SESSION_FILE })
         console.log('💾 Sessão salva com sucesso!')
-      } catch { /* silence */ }
+      } catch {}
     }
 
     if (!page.url().includes('/t/')) {
@@ -126,112 +120,157 @@ async function runOfficialCrawler() {
       await page.waitForTimeout(6000)
     }
 
-    console.log('⏳ Aguardando recebimento das respostas de dados da PMC...')
+    console.log('⏳ Aguardando renderização completa da página do processo...')
     await page.waitForTimeout(8000)
 
-    // ── 2. Processar e Estruturar os Dados Oficiais ─────────────────────────
-    const ticketInfoResult = capturedApis.ticketInfo?.result || {}
-    const solicitacao = ticketInfoResult.dadosDaSolicitacao || {}
-    const rawComments = capturedApis.comments?.comments || []
+    // Scroll completo para carregar toda a timeline
+    console.log('📜 Rolando página inteira para carregar todos os cards de despachos...')
+    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight))
+    await page.waitForTimeout(3000)
+    await page.evaluate(() => window.scrollTo(0, 0))
+    await page.waitForTimeout(2000)
 
-    const attachmentsList = []
-    const historicoDespachos = []
-    const pendenciasAbertas = []
-    const itensAprovados = []
+    // ── 2. Clicar em cada botão marcado (Visualizar / Atender) ──────────────
+    console.log('\n🎯 INICIANDO CLIQUE NOS BOTÕES DE SUBDADOS:')
+    const cards = page.locator('sy-one-post-card, sy-one-user-task-card, [class*="post-card"], [class*="task-card"]')
+    const totalCards = await cards.count()
+    console.log(`📌 Encontrados ${totalCards} cards de despacho na timeline.`)
+
+    const subdadosCapturados = []
+
+    for (let i = 0; i < totalCards; i++) {
+      try {
+        const card = cards.nth(i)
+        const btn = card.locator('button, a').first()
+        
+        if (await btn.isVisible().catch(() => false)) {
+          const btnText = (await btn.innerText()).trim()
+          if (btnText.includes('Visualizar') || btnText.includes('Atender') || btnText.includes('Detalhes')) {
+            console.log(`👉 [Card ${i + 1}] Clicando no botão "${btnText}"...`)
+
+            await btn.scrollIntoViewIfNeeded()
+            await page.waitForTimeout(500)
+            await btn.click({ force: true })
+            await page.waitForTimeout(3000)
+
+            // Extrair o que abriu na tela (dialog, drawer ou popup)
+            const modalContent = await page.evaluate(() => {
+              const modal = document.querySelector('sy-dialog, .sy-dialog, [role="dialog"], .modal, .cdk-overlay-container, .sy-drawer, sy-one-form')
+              if (modal) {
+                const text = modal.innerText || modal.textContent || ''
+                const inputs = Array.from(modal.querySelectorAll('input, select, textarea, [class*="field"]')).map(el => ({
+                  label: el.getAttribute('aria-label') || el.placeholder || el.name || el.className,
+                  valor: el.value || el.innerText,
+                })).filter(i => i.valor || i.label)
+                return { text: text.trim(), inputs }
+              }
+              return null
+            })
+
+            if (modalContent && modalContent.text) {
+              console.log(`   ✅ Subdado capturado (${modalContent.text.slice(0, 80).replace(/\n/g, ' ')}...)`)
+              subdadosCapturados.push({
+                cardIndice: i + 1,
+                acao: btnText,
+                detalhesTexto: modalContent.text,
+                camposExtraidos: modalContent.inputs,
+              })
+            }
+
+            // Fechar modal
+            await page.keyboard.press('Escape')
+            await page.waitForTimeout(1000)
+          }
+        }
+      } catch (err) {
+        console.log(`   ⚠️ Card ${i + 1} pulado: ${err.message}`)
+        await page.keyboard.press('Escape')
+      }
+    }
+
+    // ── 3. Estruturação Final com Dados Primários + Subdados ─────────────────
+    console.log('\n📊 Consolidando todos os dados do processo...')
+
+    const rawComments = apiResponses.comments?.comments || []
+    const historicoCompleto = []
+    const pendencias = []
+    const aprovacoes = []
+    const anexos = []
 
     rawComments.forEach(comment => {
-      const texto = comment.text || ''
+      const texto = (comment.text || '').replace(/\n\s*\n/g, '\n').trim()
       const dataCriacao = comment._creationDate || ''
       const autor = comment.user?.name || 'Prefeitura Municipal de Curitiba'
       const acao = comment.action ? comment.action.name : null
 
-      // Anexos
       if (Array.isArray(comment.attachments)) {
         comment.attachments.forEach(att => {
-          attachmentsList.push({
+          anexos.push({
             nome: att.name,
             tamanho: `${Math.round(att.length / 1024)} KB`,
-            tipo: att.contentType,
             id: att._id,
           })
         })
       }
 
-      // Despacho no histórico
-      const despacho = {
+      const item = {
         data: dataCriacao,
-        autor,
-        acao,
-        despachoTexto: texto.replace(/\n\s*\n/g, '\n').trim(),
+        orgao: autor,
+        acaoDisponivel: acao,
+        despacho: texto,
       }
-      historicoDespachos.push(despacho)
+      historicoCompleto.push(item)
 
-      // Análise de pendências vs aprovações
       const lower = texto.toLowerCase()
       if (lower.includes('pendência') || lower.includes('aguardando resposta') || lower.includes('exigência')) {
-        pendenciasAbertas.push(despacho)
+        pendencias.push(item)
       } else if (lower.includes('deferido') || lower.includes('aprovado') || lower.includes('reconhecido')) {
-        itensAprovados.push(despacho)
+        aprovacoes.push(item)
       }
     })
 
-    const relatorioConsolidado = {
-      portal: 'Prefeitura Municipal de Curitiba - Serviços Digitais (SMU)',
+    const relatorioFinal = {
+      portal: 'Prefeitura Municipal de Curitiba (PMC)',
       servico: 'Emitir Certificado de Conclusão de Obra (CVCO)',
-      ticketId: '69a5027b7be4a87d6455e477',
-      dataConsulta: new Date().toISOString(),
-      statusGeral: pendenciasAbertas.length > 0 ? 'Com Exigência / Aguardando Resposta' : 'Em Análise / Tramitação',
-      resumo: {
-        totalDespachos: historicoDespachos.length,
-        totalPendenciasAbertas: pendenciasAbertas.length,
-        totalAprovacoes: itensAprovados.length,
-        totalDocumentosPdfAnexados: attachmentsList.length,
+      ticketUrl: TICKET_URL,
+      dataExtracao: new Date().toISOString(),
+      statusGeral: pendencias.length > 0 ? 'Com Exigência / Aguardando Solicitante' : 'Em Análise',
+      resumoGeral: {
+        totalDespachos: historicoCompleto.length,
+        totalPendenciasAbertas: pendencias.length,
+        totalItensAprovados: aprovacoes.length,
+        totalSubdadosCapturadosNosBotoes: subdadosCapturados.length,
+        totalArquivosPdfAnexados: anexos.length,
       },
-      pendenciasNaoResolvidas: pendenciasAbertas,
-      itensAprovadosEDeferidos: itensAprovados,
-      documentosEGuiasAnexadas: attachmentsList,
-      historicoCompletoDeMovimentacoes: historicoDespachos,
+      pendenciasNaoResolvidas: pendencias,
+      itensAprovados: aprovacoes,
+      subdadosExtraidosDosBotoes: subdadosCapturados,
+      documentosEGuiasAnexadas: anexos,
+      historicoCronologicoCompleto: historicoCompleto,
     }
 
-    // Salvar JSON Oficial Consolidado
+    // Salvar JSON Oficial Completo
     const jsonPath = 'scripts/curitiba-dados-completos.json'
-    fs.writeFileSync(jsonPath, JSON.stringify(relatorioConsolidado, null, 2), 'utf-8')
-    console.log(`\n💾 Relatório estruturado salvo com sucesso em: ${jsonPath}`)
+    fs.writeFileSync(jsonPath, JSON.stringify(relatorioFinal, null, 2), 'utf-8')
+    console.log(`💾 JSON oficial completo salvo em: ${jsonPath}`)
 
     // Salvar Screenshot
     await page.screenshot({ path: 'scripts/curitiba-processo-completo.png', fullPage: true })
 
-    // ── 3. Exibir Resumo no Terminal ─────────────────────────────────────────
-    console.log('\n═══════════════════════════════════════════════════════════════')
-    console.log('📋 RELATÓRIO DO PROCESSO (PREFEITURA DE CURITIBA):')
     console.log('═══════════════════════════════════════════════════════════════')
-    console.log(`📌 Serviço: ${relatorioConsolidado.servico}`)
-    console.log(`🏷️ Status Geral: ${relatorioConsolidado.statusGeral}`)
-    console.log(`📑 Total de Movimentações: ${relatorioConsolidado.resumo.totalDespachos}`)
-    console.log(`🔴 Pendências / Exigências Abertas: ${relatorioConsolidado.resumo.totalPendenciasAbertas}`)
-    console.log(`🟢 Itens Deferidos / Aprovados: ${relatorioConsolidado.resumo.totalAprovacoes}`)
-    console.log(`📎 Documentos e Guias PDF: ${relatorioConsolidado.resumo.totalDocumentosPdfAnexados}`)
-
-    console.log('\n🔴 PENDÊNCIAS EM ABERTO IDENTIFICADAS:')
-    relatorioConsolidado.pendenciasNaoResolvidas.forEach((p, idx) => {
-      console.log(`\n[${idx + 1}] Data: ${p.data.split('T')[0]}`)
-      console.log(`    Órgão: ${p.autor}`)
-      console.log(`    Texto: ${p.despachoTexto}`)
-      if (p.acao) console.log(`    Ação Disponível no Portal: "${p.acao}"`)
-    })
-
-    console.log('\n📎 DOCUMENTOS DISPONIBILIZADOS PELA PMC:')
-    relatorioConsolidado.documentosEGuiasAnexadas.forEach((doc, idx) => {
-      console.log(`[${idx + 1}] ${doc.nome} (${doc.tamanho}) - ID: ${doc.id}`)
-    })
+    console.log('🎉 RELATÓRIO CONSOLIDADO FINAL:')
     console.log('═══════════════════════════════════════════════════════════════')
+    console.log(`• Status do Processo: ${relatorioFinal.statusGeral}`)
+    console.log(`• Pendências em Aberto: ${relatorioFinal.resumoGeral.totalPendenciasAbertas}`)
+    console.log(`• Subdados extraídos dos botões: ${relatorioFinal.resumoGeral.totalSubdadosCapturadosNosBotoes}`)
+    console.log(`• Documentos PDF: ${relatorioFinal.resumoGeral.totalArquivosPdfAnexados}`)
 
   } catch (error) {
-    console.error('❌ Erro na execução do crawler:', error)
+    console.error('❌ Erro durante o crawler:', error)
   } finally {
     await browser.close()
-    console.log('🏁 Execução finalizada.')
+    console.log('🏁 Crawler finalizado.')
   }
 }
 
-runOfficialCrawler()
+runFullCrawler()
