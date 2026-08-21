@@ -1,4 +1,4 @@
-﻿/**
+/**
  * scripts/crawler-curitiba.mjs
  * ─────────────────────────────────────────────────────────────────────────────
  * Robô Oficial de Extração Profunda & Subdados - Prefeitura de Curitiba (PMC / SYDLE)
@@ -153,33 +153,52 @@ async function runFullCrawler() {
             await btn.click({ force: true })
             await page.waitForTimeout(3000)
 
-            // Extrair o que abriu na tela (dialog, drawer ou popup)
+            // Extrair o que abriu na tela (sy-dialog, drawer ou popup)
             const modalContent = await page.evaluate(() => {
-              const modal = document.querySelector('sy-dialog, .sy-dialog, [role="dialog"], .modal, .cdk-overlay-container, .sy-drawer, sy-one-form')
-              if (modal) {
-                const text = modal.innerText || modal.textContent || ''
-                const inputs = Array.from(modal.querySelectorAll('input, select, textarea, [class*="field"]')).map(el => ({
-                  label: el.getAttribute('aria-label') || el.placeholder || el.name || el.className,
-                  valor: el.value || el.innerText,
-                })).filter(i => i.valor || i.label)
-                return { text: text.trim(), inputs }
+              const dialog = document.querySelector('sy-dialog[visible], sy-dialog, sy-sd-dialog-one-form, [role="dialog"]')
+              if (dialog) {
+                function getDeepText(node) {
+                  let str = ''
+                  if (!node) return str
+                  if (node.shadowRoot) str += getDeepText(node.shadowRoot) + ' '
+                  if (node.children) {
+                    for (const child of node.children) {
+                      str += getDeepText(child) + ' '
+                    }
+                  }
+                  if (node.childNodes) {
+                    for (const n of node.childNodes) {
+                      if (n.nodeType === Node.TEXT_NODE && n.textContent.trim()) {
+                        str += n.textContent.trim() + ' '
+                      }
+                    }
+                  }
+                  return str
+                }
+                const deepText = getDeepText(dialog).replace(/\s+/g, ' ').trim()
+                return { text: deepText || dialog.innerText || '' }
               }
               return null
             })
 
             if (modalContent && modalContent.text) {
-              console.log(`   ✅ Subdado capturado (${modalContent.text.slice(0, 80).replace(/\n/g, ' ')}...)`)
+              console.log(`   ✅ Subdado capturado (${modalContent.text.slice(0, 90)}...)`)
               subdadosCapturados.push({
                 cardIndice: i + 1,
                 acao: btnText,
                 detalhesTexto: modalContent.text,
-                camposExtraidos: modalContent.inputs,
               })
             }
 
-            // Fechar modal
-            await page.keyboard.press('Escape')
-            await page.waitForTimeout(1000)
+            // Fechar o sy-dialog explicitamente
+            const closeBtn = page.locator('sy-sd-dialog-one-form-header button, sy-dialog button, button[aria-label*="Fechar"], button:has-text("Fechar")').first()
+            if (await closeBtn.isVisible().catch(() => false)) {
+              await closeBtn.click({ force: true }).catch(() => {})
+              await page.waitForTimeout(1000)
+            } else {
+              await page.keyboard.press('Escape')
+              await page.waitForTimeout(1000)
+            }
           }
         }
       } catch (err) {
