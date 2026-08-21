@@ -8,7 +8,8 @@
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "preview": "vite preview",
-    "crawler:curitiba": "node scripts/crawler-curitiba.mjs"
+    "crawler:curitiba": "node scripts/crawler-curitiba.mjs",
+    "crawler:sanepar": "node scripts/crawler-eprotocolo.mjs"
   },
   "dependencies": {
     "@mlightcad/cad-simple-viewer": "^1.5.7",

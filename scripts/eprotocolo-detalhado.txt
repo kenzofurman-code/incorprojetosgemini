@@ -1,0 +1,271 @@
+SECRETARIA DA ADMINISTRAÇÃO
+E DA PREVIDÊNCIA
+Protocolo Geral do Estado do Paraná
+índice
+Para acesso completo ao conteúdo do processo, o usuário deve realizar login através da Central de Segurança.
+Protocolo
+Digital
+19.749.934-6
+Situação:
+Concluído
+Data Cadastro:
+Tue Nov 22 21:09:00 BRT 2022
+Órgão:
+CIDADAO - PARANÁ INTELIGÊNCIA ARTIFICIAL - PIÁ
+Acesso:
+Restrito
+Cidade:
+CURITIBA / PR
+Espécie:
+SOLICITAÇÃO
+Documento:
+-
+Assunto:
+SANEAMENTO BASICO
+Palavras-Chave:
+CIDADAO
+Apensado ao:
+Solicitação de Apensamento ao:
+Protocolos Apensados
+Protocolo não possui outros protocolos apensados.
+Protocolos Agrupados
+Protocolo não possui outros protocolos agrupados.
+Último Andamento
+Local de Envio:
+SANEPAR - SANEPAR/11620
+Onde está:
+SANEPAR - SANEPAR/12290
+Motivo:
+TRANSFERÊNCIA
+Enviado em:
+Wed May 27 16:25:00 BRT 2026
+Dias em Trâmite:
+890
+Dias Sobrestado:
+0
+Dias Arquivo Corrente:
+0
+Andamentos
+Sequência
+	
+Data
+	
+Local De
+	
+Local Para
+	
+Motivo
+
+
+13
+	
+27/05/2026 16:25
+	
+SANEPAR/11620 - DC/GGC/GERC-COORD. CLIENTES ESPECIAIS
+	
+SANEPAR/12290 - DC/SPGC/GERC-COORD. COMERCIAL DE CARTEIRAS ESTRATEGICAS
+	
+TRANSFERÊNCIA
+
+
+12
+	
+30/04/2025 14:53
+	
+SANEPAR/11620 - DC/GGC/GERC-COORD. CLIENTES ESPECIAIS
+	
+SANEPAR/11620 - DC/GGC/GERC-COORD. CLIENTES ESPECIAIS
+	
+ARQUIVADO
+
+
+11
+	
+30/04/2025 10:51
+	
+SANEPAR/11724 - DO/GGML/GEML-COORD. DESENV. OPERACIONAL
+	
+SANEPAR/11620 - DC/GGC/GERC-COORD. CLIENTES ESPECIAIS
+	
+ANALISE CONCLUIDA/ARQUIVO CORRENTE
+
+
+10
+	
+14/04/2025 13:21
+	
+SANEPAR/09104 - DO/GGML-GERENCIA GERAL METROPOLITANA
+	
+SANEPAR/11724 - DO/GGML/GEML-COORD. DESENV. OPERACIONAL
+	
+ANALISAR
+
+
+9
+	
+09/04/2025 11:28
+	
+SANEPAR/11620 - DC/GGC/GERC-COORD. CLIENTES ESPECIAIS
+	
+SANEPAR/09104 - DO/GGML-GERENCIA GERAL METROPOLITANA
+	
+ANALISAR
+
+
+8
+	
+27/02/2023 08:15
+	
+SANEPAR/09116 - DO/GGML/GRCTN-COORD. OPERACAO DE REDES
+	
+SANEPAR/11620 - DC/GGC/GERC-COORD. CLIENTES ESPECIAIS
+	
+ANALISE CONCLUIDA/ARQUIVO CORRENTE
+
+
+7
+	
+06/02/2023 11:11
+	
+SANEPAR/09116 - DO/GGML/GRCTN-COORD. OPERACAO DE REDES
+	
+SANEPAR/09116 - DO/GGML/GRCTN-COORD. OPERACAO DE REDES
+	
+ANALISAR
+
+
+6
+	
+25/11/2022 16:38
+	
+SANEPAR/11620 - DC/GGC/GERC-COORD. CLIENTES ESPECIAIS
+	
+SANEPAR/09116 - DO/GGML/GRCTN-COORD. OPERACAO DE REDES
+	
+ANALISAR
+
+
+5
+	
+25/11/2022 14:47
+	
+SANEPAR/11611 - DC/GGC/GERC-GER.RELACIONAMENTO COMERCIAL
+	
+SANEPAR/11620 - DC/GGC/GERC-COORD. CLIENTES ESPECIAIS
+	
+PROVIDENCIAS
+
+
+4
+	
+23/11/2022 09:48
+	
+SANEPAR/08984 - DC/DC-DIR COMERCIAL
+	
+SANEPAR/11611 - DC/GGC/GERC-GER.RELACIONAMENTO COMERCIAL
+	
+PROVIDENCIAS
+
+
+3
+	
+23/11/2022 08:12
+	
+SANEPAR/08982 - DP/GSEC-GER.SECRETARIA EXECUTIVA
+	
+SANEPAR/08984 - DC/DC-DIR COMERCIAL
+	
+PROVIDENCIAS
+
+
+2
+	
+23/11/2022 08:08
+	
+SANEPAR/PTG - PROTOCOLO GERAL
+	
+SANEPAR/08982 - DP/GSEC-GER.SECRETARIA EXECUTIVA
+	
+PROVIDENCIAS
+
+
+1
+	
+22/11/2022 21:09
+	
+CIDADAO - PARANA INTELIGENCIA ARTIFICIAL - PIA
+	
+SANEPAR/PTG - PROTOCOLO GERAL
+	
+ANDAMENTO INICIAL
+Arquivamento
+Sequência:
+13
+Local Atual:
+SANEPAR/12290
+Número:
+2/2025
+
+Local do Arquivo:
+SANEPAR/12290
+Data Primeiro Arquivamento:
+Wed Apr 30 00:00:00 BRT 2025
+Tipo Arquivamento:
+S     (C-Caixa P-Pasta S-Caixa Digital F-Pasta Funcional)
+Ano Arquivamento Atual:
+2026
+Ano de Transferência:
+Origem:
+SANEPAR/11620
+Local Físico:
+Classificação:
+0 6 4 3
+Ano de Eliminação:
+2126
+Observações:
+Processos da Coordenação de Clientes Especiais - GERC
+Sequência:
+12
+Local Atual:
+SANEPAR/12290
+Número:
+2/2025
+
+Local do Arquivo:
+SANEPAR/11620
+Data Primeiro Arquivamento:
+Wed Apr 30 00:00:00 BRT 2025
+Tipo Arquivamento:
+S     (C-Caixa P-Pasta S-Caixa Digital F-Pasta Funcional)
+Ano Arquivamento Atual:
+2025
+Ano de Transferência:
+Origem:
+SANEPAR/11620
+Local Físico:
+Classificação:
+0 6 4 3
+Ano de Eliminação:
+2126
+Observações:
+Processos da Coordenação de Clientes Especiais - GERC
+Eliminação
+Protocolo sem informação de eliminação.
+Mais Informações
+
+Para mais informações, entre em contato com o local atual deste protocolo.
+
+SANEPAR/12290 - DC/SPGC/GERC-COORD. COMERCIAL DE CARTEIRAS ESTRATEGICAS
+
+telefone: (41) 3582-2296-2296
+
+Cadastrado em:
+Tue Nov 22 21:09:00 BRT 2022
+Última Atualização Cadastral em:
+Wed Apr 09 11:18:00 BRT 2025
+ Monitorar
+ 
+Tela inicial
+ Sexta, 21 de Agosto de 2026 - 13:14
+ SECRETARIA DA ADMINISTRAÇÃO E DA PREVIDÊNCIA
+ v10_0_31 (00019p_0) -  topo 
