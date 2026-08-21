@@ -197,17 +197,64 @@ async function runMainCrawler() {
           return extractAll(dialog)
         })
 
+        // 4. Extrair arquivos e fotos com IDs oficiais e baixar em public/vistorias/hall_design/
+        const dialogFiles = await page.evaluate(() => {
+          const list = []
+          function findFiles(root) {
+            if (!root) return
+            if (root.tagName === 'SY-FILE-ITEM') {
+              const d = root.data || {}
+              list.push({
+                id: d._id || d.id,
+                name: d.name || root.querySelector('.file-name')?.innerText || 'arquivo',
+                ext: d.extension || root.querySelector('.file-extension')?.innerText || 'jpg',
+                size: d.size || 0
+              })
+            }
+            if (root.shadowRoot) findFiles(root.shadowRoot)
+            if (root.children) {
+              for (const c of root.children) findFiles(c)
+            }
+          }
+          findFiles(document.querySelector('sy-dialog, sy-sd-dialog-one-form') || document.body)
+          return list.filter(f => f.id)
+        })
+
+        const vistoriasDir = path.resolve('public', 'vistorias', 'hall_design')
+        if (!fs.existsSync(vistoriasDir)) fs.mkdirSync(vistoriasDir, { recursive: true })
+
+        if (dialogFiles.length > 0) {
+          console.log(`   📸 Encontrados ${dialogFiles.length} arquivos/fotos com download oficial no formulário!`)
+          for (let fIdx = 0; fIdx < dialogFiles.length; fIdx++) {
+            const f = dialogFiles[fIdx]
+            const cleanName = f.name.replace(/[/\\?%*:|"<>]/g, '_') + '.' + f.ext
+            const destPath = path.join(vistoriasDir, cleanName)
+            const url = `https://servicodigital.curitiba.pr.gov.br/api/1/servicedesk-embedded/_classId/00000000000000000000000f/_get/${f.id}`
+
+            try {
+              if (!fs.existsSync(destPath)) {
+                const res = await page.request.get(url)
+                if (res.ok()) {
+                  const buf = await res.body()
+                  fs.writeFileSync(destPath, buf)
+                  console.log(`      ⬇️ [${fIdx + 1}/${dialogFiles.length}] Salvo: ${cleanName} (${Math.round(buf.length / 1024)} KB)`)
+                }
+              }
+            } catch (err) {
+              console.log(`      ⚠️ Erro ao salvar ${cleanName}: ${err.message}`)
+            }
+          }
+        }
+
         if (dialogData && dialogData.str.trim()) {
           console.log(`   📄 Subdado capturado (${dialogData.str.slice(0, 90).replace(/\n/g, ' ')}...)`)
-          if (dialogData.links.length > 0) {
-            console.log(`   📎 ${dialogData.links.length} arquivo(s)/link(s) encontrados no formulário.`)
-          }
           subdadosAcoes.push({
             indice: i + 1,
             acaoNome: btnText,
             conteudoTexto: dialogData.str.trim(),
             linksDocumentos: dialogData.links,
             imagensFotos: dialogData.imgs,
+            arquivosBaixados: dialogFiles
           })
         }
 

@@ -184,7 +184,7 @@ export interface MovimentacaoProtocolo {
   apontamentosExigencias?: string[] // O que a prefeitura apontou/exigiu
   correcoesAtendidas?: string[] // O que foi corrigido/respondido
   documentosAnexados?: Array<{ nome: string; tamanho?: string; tipo?: string; url?: string }>
-  fotosVistoria?: Array<{ nome: string; descricao?: string; tamanho?: string }>
+  fotosVistoria?: Array<{ nome: string; descricao?: string; tamanho?: string; url?: string }>
   parecerCompleto?: string
 }
 

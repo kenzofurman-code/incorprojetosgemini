@@ -1,4 +1,4 @@
-﻿/**
+/**
  * EtapaDetailModal.tsx
  * ─────────────────────────────────────────────────────────────────────────────
  * Modal Interativo de Detalhamento de Etapa / Despacho do Protocolo.
@@ -36,7 +36,7 @@ export default function EtapaDetailModal({
   etapa,
   onClose,
 }: EtapaDetailModalProps) {
-  const [selectedPhoto, setSelectedPhoto] = useState<{ nome: string; descricao?: string; tamanho?: string } | null>(null)
+  const [selectedPhoto, setSelectedPhoto] = useState<{ nome: string; descricao?: string; tamanho?: string; url?: string } | null>(null)
 
   const isExigencia =
     etapa.status === 'com_exigencia' ||
@@ -225,34 +225,41 @@ export default function EtapaDetailModal({
                 </div>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                {etapa.documentosAnexados.map((doc, idx) => (
-                  <div
-                    key={idx}
-                    className="p-2.5 rounded-xl bg-slate-950/80 border border-slate-800 hover:border-slate-700 transition-all flex items-center justify-between gap-2"
-                  >
-                    <div className="flex items-center gap-2 min-w-0">
-                      <div className="w-8 h-8 rounded-lg bg-blue-500/10 border border-blue-500/20 flex items-center justify-center text-blue-400 flex-shrink-0 font-bold text-[10px]">
-                        PDF
-                      </div>
-                      <div className="min-w-0">
-                        <div className="text-xs font-semibold text-slate-200 truncate" title={doc.nome}>
-                          {doc.nome}
-                        </div>
-                        {doc.tamanho && (
-                          <div className="text-[10px] text-slate-500 font-mono">{doc.tamanho}</div>
-                        )}
-                      </div>
-                    </div>
+                {etapa.documentosAnexados.map((doc, idx) => {
+                  const localDocUrl = doc.url || `/vistorias/hall_design/${doc.nome}`
 
-                    <button
-                      onClick={() => alert(`Baixando documento oficial: ${doc.nome}`)}
-                      className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors flex-shrink-0 cursor-pointer"
-                      title="Baixar ou visualizar documento"
+                  return (
+                    <div
+                      key={idx}
+                      className="p-2.5 rounded-xl bg-slate-950/80 border border-slate-800 hover:border-slate-700 transition-all flex items-center justify-between gap-2"
                     >
-                      <Download size={13} />
-                    </button>
-                  </div>
-                ))}
+                      <div className="flex items-center gap-2 min-w-0">
+                        <div className="w-8 h-8 rounded-lg bg-blue-500/10 border border-blue-500/20 flex items-center justify-center text-blue-400 flex-shrink-0 font-bold text-[10px]">
+                          PDF
+                        </div>
+                        <div className="min-w-0">
+                          <div className="text-xs font-semibold text-slate-200 truncate" title={doc.nome}>
+                            {doc.nome}
+                          </div>
+                          {doc.tamanho && (
+                            <div className="text-[10px] text-slate-500 font-mono">{doc.tamanho}</div>
+                          )}
+                        </div>
+                      </div>
+
+                      <a
+                        href={localDocUrl}
+                        download={doc.nome}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors flex-shrink-0 cursor-pointer"
+                        title="Baixar ou abrir documento"
+                      >
+                        <Download size={13} />
+                      </a>
+                    </div>
+                  )
+                })}
               </div>
             </div>
           )}
@@ -263,54 +270,72 @@ export default function EtapaDetailModal({
               <div className="flex items-center justify-between">
                 <div className="text-xs font-bold text-white flex items-center gap-1.5">
                   <ImageIcon size={15} className="text-purple-400" />
-                  <span>Relatório Fotográfico da Vistoria ({etapa.fotosVistoria.length} fotos disponíveis para download):</span>
+                  <span>Relatório Fotográfico da Vistoria ({etapa.fotosVistoria.length} fotos disponíveis):</span>
                 </div>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                {etapa.fotosVistoria.map((foto, idx) => (
-                  <div
-                    key={idx}
-                    className="p-3 rounded-2xl bg-slate-950/80 border border-slate-800 hover:border-purple-500/40 transition-all flex items-center justify-between gap-3 group"
-                  >
+                {etapa.fotosVistoria.map((foto, idx) => {
+                  const localPhotoUrl = foto.url || `/vistorias/hall_design/${foto.nome}`
+
+                  return (
                     <div
-                      onClick={() => setSelectedPhoto(foto)}
-                      className="flex items-center gap-2.5 min-w-0 cursor-pointer flex-1"
+                      key={idx}
+                      className="p-3 rounded-2xl bg-slate-950/80 border border-slate-800 hover:border-purple-500/40 transition-all flex items-center justify-between gap-3 group"
                     >
-                      <div className="w-10 h-10 rounded-xl bg-purple-500/10 border border-purple-500/20 flex items-center justify-center text-purple-400 flex-shrink-0 group-hover:scale-105 transition-transform">
-                        <ImageIcon size={18} />
-                      </div>
-                      <div className="min-w-0">
-                        <div className="text-xs font-bold text-slate-200 truncate group-hover:text-purple-300 transition-colors" title={foto.nome}>
-                          {foto.nome}
-                        </div>
-                        <div className="text-[11px] text-slate-400 truncate">
-                          {foto.descricao || 'Foto de vistoria da obra'}
-                        </div>
-                        {foto.tamanho && (
-                          <div className="text-[10px] text-slate-500 font-mono mt-0.5">{foto.tamanho}</div>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="flex items-center gap-1.5 flex-shrink-0">
-                      <button
+                      <div
                         onClick={() => setSelectedPhoto(foto)}
-                        className="p-1.5 rounded-lg bg-slate-800 hover:bg-purple-500/20 text-slate-400 hover:text-purple-300 transition-colors cursor-pointer"
-                        title="Visualizar foto ampliada"
+                        className="flex items-center gap-2.5 min-w-0 cursor-pointer flex-1"
                       >
-                        <ZoomIn size={14} />
-                      </button>
+                        {/* Miniatura Real da Imagem com Fallback */}
+                        <div className="w-12 h-12 rounded-xl bg-purple-500/10 border border-purple-500/20 flex items-center justify-center text-purple-400 flex-shrink-0 group-hover:scale-105 transition-transform overflow-hidden relative">
+                          <img
+                            src={localPhotoUrl}
+                            alt={foto.nome}
+                            className="w-full h-full object-cover"
+                            onError={(e) => {
+                              // Se a imagem não for encontrada, exibe ícone estilizado
+                              (e.target as HTMLElement).style.display = 'none'
+                            }}
+                          />
+                          <ImageIcon size={18} className="absolute inset-0 m-auto text-purple-400/80 pointer-events-none -z-0" />
+                        </div>
 
-                      <button
-                        onClick={() => handleDownloadSinglePhoto(foto)}
-                        className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors cursor-pointer"
-                        title="Baixar esta foto"
-                      >
-                        <Download size={14} />
-                      </button>
+                        <div className="min-w-0">
+                          <div className="text-xs font-bold text-slate-200 truncate group-hover:text-purple-300 transition-colors" title={foto.nome}>
+                            {foto.nome}
+                          </div>
+                          <div className="text-[11px] text-slate-400 truncate">
+                            {foto.descricao || 'Foto de vistoria da obra'}
+                          </div>
+                          {foto.tamanho && (
+                            <div className="text-[10px] text-slate-500 font-mono mt-0.5">{foto.tamanho}</div>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-1.5 flex-shrink-0">
+                        <button
+                          onClick={() => setSelectedPhoto(foto)}
+                          className="p-1.5 rounded-lg bg-slate-800 hover:bg-purple-500/20 text-slate-400 hover:text-purple-300 transition-colors cursor-pointer"
+                          title="Visualizar foto ampliada"
+                        >
+                          <ZoomIn size={14} />
+                        </button>
+
+                        <a
+                          href={localPhotoUrl}
+                          download={foto.nome}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors cursor-pointer"
+                          title="Baixar esta foto"
+                        >
+                          <Download size={14} />
+                        </a>
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  )
+                })}
               </div>
             </div>
           )}
@@ -358,24 +383,38 @@ export default function EtapaDetailModal({
               </button>
             </div>
 
-            <div className="w-full h-72 rounded-2xl bg-slate-950 border border-slate-800 flex flex-col items-center justify-center text-center p-6 text-slate-400">
-              <ImageIcon size={48} className="text-purple-400/60 mb-3 animate-pulse" />
-              <div className="text-sm font-bold text-slate-200">{selectedPhoto.nome}</div>
-              <div className="text-xs text-purple-300 mt-1">{selectedPhoto.descricao || 'Foto de vistoria técnica da edificação'}</div>
-              {selectedPhoto.tamanho && (
-                <div className="text-xs text-slate-500 font-mono mt-2">{selectedPhoto.tamanho} • Imagem oficial protocolada</div>
-              )}
+            {/* Imagem Ampliada com Fallback */}
+            <div className="w-full h-80 rounded-2xl bg-slate-950 border border-slate-800 flex flex-col items-center justify-center text-center p-2 text-slate-400 overflow-hidden relative">
+              <img
+                src={selectedPhoto.url || `/vistorias/hall_design/${selectedPhoto.nome}`}
+                alt={selectedPhoto.nome}
+                className="w-full h-full object-contain rounded-xl relative z-10"
+                onError={(e) => {
+                  (e.target as HTMLElement).style.display = 'none'
+                }}
+              />
+              <div className="absolute inset-0 flex flex-col items-center justify-center p-6 text-center z-0">
+                <ImageIcon size={48} className="text-purple-400/60 mb-3 animate-pulse" />
+                <div className="text-sm font-bold text-slate-200">{selectedPhoto.nome}</div>
+                <div className="text-xs text-purple-300 mt-1">{selectedPhoto.descricao || 'Foto de vistoria técnica da edificação'}</div>
+                {selectedPhoto.tamanho && (
+                  <div className="text-xs text-slate-500 font-mono mt-2">{selectedPhoto.tamanho} • Imagem oficial protocolada</div>
+                )}
+              </div>
             </div>
 
             <div className="flex items-center justify-between pt-2">
               <span className="text-xs text-slate-400">Origem: Secretaria Municipal de Urbanismo / PMC</span>
-              <button
-                onClick={() => handleDownloadSinglePhoto(selectedPhoto)}
+              <a
+                href={selectedPhoto.url || `/vistorias/hall_design/${selectedPhoto.nome}`}
+                download={selectedPhoto.nome}
+                target="_blank"
+                rel="noopener noreferrer"
                 className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold shadow-lg transition-all cursor-pointer"
               >
                 <Download size={14} />
                 <span>Baixar Foto em Alta Resolução</span>
-              </button>
+              </a>
             </div>
           </div>
         </div>
