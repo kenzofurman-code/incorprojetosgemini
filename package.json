@@ -9,7 +9,8 @@
     "lint": "oxlint",
     "preview": "vite preview",
     "crawler:curitiba": "node scripts/crawler-curitiba.mjs",
-    "crawler:sanepar": "node scripts/crawler-eprotocolo.mjs"
+    "crawler:sanepar": "node scripts/crawler-eprotocolo.mjs",
+    "crawler:bombeiros": "node scripts/crawler-bombeiros.mjs"
   },
   "dependencies": {
     "@mlightcad/cad-simple-viewer": "^1.5.7",
@@ -37,6 +38,7 @@
     "react-router-dom": "^7.18.1",
     "recharts": "^3.9.0",
     "tailwindcss": "^4.3.2",
+    "tesseract.js": "^7.0.0",
     "three": "^0.185.1",
     "web-ifc": "^0.0.77"
   },
