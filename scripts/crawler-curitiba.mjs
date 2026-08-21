@@ -1,14 +1,9 @@
 ﻿/**
  * scripts/crawler-curitiba.mjs
  * ─────────────────────────────────────────────────────────────────────────────
- * Robô Oficial de Extração Profunda de Ações, Subdados, PDFs e Fotos - Curitiba (PMC)
- *  1. Identifica todas as "Ações Disponíveis" (Visualizar, Visualizar documento(s), Atender)
- *  2. Clica em cada ação diretamente na timeline
- *  3. Extrai o conteúdo integral do modal:
- *     - Textos completos de pareceres e exigências
- *     - Lista de PDFs, Pranchas e Documentos com Links de Download
- *     - Fotos e Imagens anexadas
- *  4. Salva tudo consolidado no JSON oficial
+ * Robô Oficial PMC - Extração dos Subdados, PDFs e Fotos
+ * Clica em cada ação (.sy-sd-action-container sy-button), extrai o modal e fecha
+ * com garantia de liberação da tela.
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
@@ -46,9 +41,9 @@ const IS_HEADLESS = env.HEADLESS !== 'false'
 
 const SESSION_FILE = 'scripts/session-curitiba.json'
 
-async function runDeepActionCrawler() {
+async function runMainCrawler() {
   console.log('═══════════════════════════════════════════════════════════════')
-  console.log('🏛️ ROBÔ PMC - EXTRAÇÃO COMPLETA DE AÇÕES, PDFS E FOTOS')
+  console.log('🏛️ ROBÔ PMC - EXTRAÇÃO COMPLETA DE AÇÕES, PDFS E SUBDADOS')
   console.log('═══════════════════════════════════════════════════════════════')
 
   const browser = await chromium.launch({
@@ -58,7 +53,7 @@ async function runDeepActionCrawler() {
 
   let context
   if (fs.existsSync(SESSION_FILE)) {
-    console.log('🔑 Carregando sessão de login...')
+    console.log('🔑 Carregando sessão autenticada...')
     try {
       context = await browser.newContext({ storageState: SESSION_FILE, viewport: { width: 1440, height: 1000 } })
     } catch {
@@ -70,17 +65,13 @@ async function runDeepActionCrawler() {
 
   const page = await context.newPage()
 
-  // Interceptar respostas de API
-  const apiResponses = { files: [] }
+  const apiResponses = {}
   page.on('response', async (res) => {
     const url = res.url()
     try {
       if (url.includes('showTicketInfo')) apiResponses.ticketInfo = await res.json()
       if (url.includes('getTicketComments')) apiResponses.comments = await res.json()
       if (url.includes('getCards')) apiResponses.cards = await res.json()
-      if (url.includes('getFile') || url.includes('/assets/')) {
-        apiResponses.files.push(url)
-      }
     } catch {}
   })
 
@@ -89,9 +80,9 @@ async function runDeepActionCrawler() {
     await page.goto(TICKET_URL, { waitUntil: 'load', timeout: 60000 })
     await page.waitForTimeout(4000)
 
-    // Se redirecionar para o login
+    // Se redirecionar para autenticação
     if (page.url().includes('autenticacao-ecidadao') || page.url().includes('/login')) {
-      console.log('🔒 Autenticando no e-Cidadão...')
+      console.log('🔒 Fazendo login no e-Cidadão...')
 
       const btnCpfSelector = 'button:has-text("Entrar com CPF"), #btnEntrarCPF, a:has-text("Entrar com CPF")'
       await page.waitForSelector(btnCpfSelector, { state: 'visible', timeout: 30000 })
@@ -124,122 +115,114 @@ async function runDeepActionCrawler() {
       await page.waitForTimeout(6000)
     }
 
-    console.log('⏳ Carregando dados e timeline do SYDLE ONE...')
+    console.log('⏳ Carregando dados da tela da PMC...')
     await page.waitForTimeout(8000)
 
-    // Scroll para renderizar todos os cards
-    console.log('📜 Rolando página inteira para expandir timeline...')
+    // Scroll completo
+    console.log('📜 Rolando página inteira para carregar todas as ações...')
     await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight))
     await page.waitForTimeout(3000)
     await page.evaluate(() => window.scrollTo(0, 0))
     await page.waitForTimeout(2000)
 
-    // ── 1. Extrair os dados da API de comentários e ações ────────────────────
-    const rawComments = apiResponses.comments?.comments || []
-    console.log(`📌 Identificados ${rawComments.length} despachos oficiais na timeline.`)
-
-    // Encontrar cards com botões de ação na tela
-    const actionButtons = page.locator('sy-one-post-card button, sy-one-user-task-card button, [class*="post-card"] button, [class*="task-card"] button, button:has-text("Visualizar"), button:has-text("Atender")')
+    // ── 1. Localizar Botões de Ação Específicos (.sy-sd-action-container) ─────
+    const actionButtons = page.locator('.sy-sd-action-container sy-button, sy-button.sy-sd-action-button')
     const totalButtons = await actionButtons.count()
-    console.log(`🎯 Encontrados ${totalButtons} botões de Ação na interface.`)
+    console.log(`🎯 Encontrados ${totalButtons} botões de Ação na página!`)
 
     const subdadosAcoes = []
 
-    // ── 2. Clicar em cada Ação Disponível para Extrair os Dados Internos ──────
+    // ── 2. Clicar em cada botão individualmente ──────────────────────────────
     for (let i = 0; i < totalButtons; i++) {
       try {
         const btn = actionButtons.nth(i)
-        if (await btn.isVisible().catch(() => false)) {
-          const btnText = (await btn.innerText()).trim()
-          console.log(`\n👉 [Ação ${i + 1}/${totalButtons}] Clicando em "${btnText}"...`)
+        const btnText = (await btn.innerText()).trim()
+        console.log(`\n👉 [${i + 1}/${totalButtons}] Clicando na Ação: "${btnText}"...`)
 
-          await btn.scrollIntoViewIfNeeded()
-          await page.waitForTimeout(500)
-          await btn.click({ force: true })
-          await page.waitForTimeout(3000)
+        await btn.scrollIntoViewIfNeeded()
+        await page.waitForTimeout(500)
+        await btn.click({ force: true })
+        await page.waitForTimeout(3500)
 
-          // Extrair tudo de dentro do modal que abriu (Textos, PDFs e Imagens)
-          const modalData = await page.evaluate(() => {
-            const dialog = document.querySelector('sy-dialog[visible], sy-dialog, sy-sd-dialog-one-form, [role="dialog"]')
-            if (!dialog) return null
+        // Extrair texto, links e imagens do diálogo
+        const dialogData = await page.evaluate(() => {
+          const dialog = document.querySelector('sy-dialog, sy-sd-dialog-one-form')
+          if (!dialog) return null
 
-            // Extrair texto profundo
-            function getDeepText(node) {
-              let str = ''
-              if (!node) return str
-              if (node.shadowRoot) str += getDeepText(node.shadowRoot) + ' '
-              if (node.children) {
-                for (const child of node.children) str += getDeepText(child) + ' '
-              }
-              if (node.childNodes) {
-                for (const n of node.childNodes) {
-                  if (n.nodeType === Node.TEXT_NODE && n.textContent.trim()) {
-                    str += n.textContent.trim() + ' '
-                  }
+          function extractAll(root) {
+            let str = ''
+            let links = []
+            let imgs = []
+
+            if (!root) return { str, links, imgs }
+
+            if (root.shadowRoot) {
+              const res = extractAll(root.shadowRoot)
+              str += res.str + ' '
+              links.push(...res.links)
+              imgs.push(...res.imgs)
+            }
+
+            const children = root.children ? Array.from(root.children) : []
+            children.forEach(c => {
+              const res = extractAll(c)
+              str += res.str + ' '
+              links.push(...res.links)
+              imgs.push(...res.imgs)
+
+              if (c.tagName === 'A' && c.href) links.push({ texto: c.innerText.trim(), url: c.href })
+              if (c.tagName === 'IMG' && c.src && !c.src.includes('data:image/svg')) imgs.push({ src: c.src, alt: c.alt || '' })
+            })
+
+            if (root.childNodes) {
+              for (const n of root.childNodes) {
+                if (n.nodeType === Node.TEXT_NODE && n.textContent.trim()) {
+                  str += n.textContent.trim() + '\n'
                 }
               }
-              return str
             }
 
-            const fullText = getDeepText(dialog).replace(/\s+/g, ' ').trim()
+            return { str, links, imgs }
+          }
 
-            // Extrair links de PDFs e Documentos
-            const links = Array.from(dialog.querySelectorAll('a[href], [download]')).map(a => ({
-              texto: a.innerText.trim(),
-              href: a.href,
-              download: a.getAttribute('download') || '',
-            })).filter(l => l.href)
+          return extractAll(dialog)
+        })
 
-            // Extrair imagens / fotos
-            const imagens = Array.from(dialog.querySelectorAll('img')).map(img => ({
-              src: img.src,
-              alt: img.alt || '',
-            })).filter(img => img.src && !img.src.includes('data:image/svg'))
-
-            return {
-              texto: fullText,
-              documentosEncontrados: links,
-              imagensEncontradas: imagens,
-            }
+        if (dialogData && dialogData.str.trim()) {
+          console.log(`   📄 Texto capturado (${dialogData.str.slice(0, 80).replace(/\n/g, ' ')}...)`)
+          subdadosAcoes.push({
+            indice: i + 1,
+            acaoNome: btnText,
+            conteudoTexto: dialogData.str.trim(),
+            linksDocumentos: dialogData.links,
+            imagensFotos: dialogData.imgs,
           })
-
-          if (modalData && modalData.texto) {
-            console.log(`   📄 Texto capturado: ${modalData.texto.slice(0, 100)}...`)
-            if (modalData.documentosEncontrados.length > 0) {
-              console.log(`   📎 ${modalData.documentosEncontrados.length} documento(s) / PDF(s) encontrados no modal!`)
-            }
-            if (modalData.imagensEncontradas.length > 0) {
-              console.log(`   🖼️ ${modalData.imagensEncontradas.length} imagem(ns) encontrada(s)!`)
-            }
-
-            subdadosAcoes.push({
-              indice: i + 1,
-              acaoNome: btnText,
-              conteudo: modalData.texto,
-              documentos: modalData.documentosEncontrados,
-              imagens: modalData.imagensEncontradas,
-            })
-          }
-
-          // Fechar modal
-          const closeBtn = page.locator('sy-sd-dialog-one-form-header button, sy-dialog button, button:has-text("Fechar")').first()
-          if (await closeBtn.isVisible().catch(() => false)) {
-            await closeBtn.click({ force: true }).catch(() => {})
-            await page.waitForTimeout(1000)
-          } else {
-            await page.keyboard.press('Escape')
-            await page.waitForTimeout(1000)
-          }
         }
+
+        // FECHAR O MODAL COM CERTEZA
+        await page.evaluate(() => {
+          const dialogs = document.querySelectorAll('sy-dialog, .sy-dialog, sy-sd-dialog-one-form')
+          dialogs.forEach(d => {
+            try {
+              d.remove() // Remove o backdrop para desobstruir a tela para o próximo clique
+            } catch {}
+          })
+        })
+        await page.waitForTimeout(1000)
+
       } catch (err) {
-        console.log(`   ⚠️ Ação ${i + 1} pulada: ${err.message}`)
-        await page.keyboard.press('Escape')
+        console.log(`   ⚠️ Erro na ação ${i + 1}: ${err.message}`)
+        await page.evaluate(() => {
+          document.querySelectorAll('sy-dialog').forEach(d => d.remove())
+        }).catch(() => {})
+        await page.waitForTimeout(1000)
       }
     }
 
     // ── 3. Montar Relatório Consolidado Completo ──────────────────────────────
     console.log('\n📊 Consolidando todos os dados, anexos, pareceres e subdados...')
 
+    const rawComments = apiResponses.comments?.comments || []
     const anexosGerais = []
     const historico = []
     const pendencias = []
@@ -268,7 +251,7 @@ async function runDeepActionCrawler() {
         })
       }
 
-      // Procurar se capturamos subdados para essa ação
+      // Subdado correspondente
       const subdadosDestaAcao = subdadosAcoes.filter(s => s.acaoNome === acaoNome)
 
       const itemHistorico = {
@@ -306,6 +289,7 @@ async function runDeepActionCrawler() {
       },
       pendenciasNaoResolvidas: pendencias,
       itensDeferidosEAprovados: deferidos,
+      subdadosExtraidosDosBotoes: subdadosAcoes,
       documentosEGuiasAnexadas: anexosGerais,
       historicoCompletoDeMovimentacoes: historico,
     }
@@ -313,7 +297,7 @@ async function runDeepActionCrawler() {
     // Salvar JSON Oficial Completo
     const jsonPath = 'scripts/curitiba-dados-completos.json'
     fs.writeFileSync(jsonPath, JSON.stringify(relatorioFinal, null, 2), 'utf-8')
-    console.log(`💾 JSON oficial completo salvo em: ${jsonPath}`)
+    console.log(`\n💾 JSON oficial completo salvo em: ${jsonPath}`)
 
     // Salvar Screenshot
     await page.screenshot({ path: 'scripts/curitiba-processo-completo.png', fullPage: true })
@@ -334,4 +318,4 @@ async function runDeepActionCrawler() {
   }
 }
 
-runDeepActionCrawler()
+runMainCrawler()
