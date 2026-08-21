@@ -28,3 +28,8 @@ dist-ssr
 .env.local
 .env.production
 .env.*.local
+
+# Crawler output
+scripts/*.png
+scripts/*.json
+!scripts/package.json
