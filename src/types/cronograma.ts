@@ -1,4 +1,4 @@
-﻿/**
+/**
  * types/cronograma.ts
  * ─────────────────────────────────────────────────────────────────────────────
  * Tipos e interfaces para o Módulo de Cronograma Avançado:
@@ -171,18 +171,29 @@ export type StatusProtocolo =
 
 export interface MovimentacaoProtocolo {
   id: string
-  data: string // YYYY-MM-DD
+  data: string // YYYY-MM-DD ou ISO
   descricao: string
   status?: StatusProtocolo
   observacoes?: string
+  autor?: string // ex: "Prefeitura Municipal de Curitiba", "SMMA", "Rafael Luiz de Medeiros"
+  unidade?: string // ex: "SMU / UCE - Controle de Edificações", "SMMA"
+  fase?: string // ex: "Em andamento", "Novo"
+  situacao?: string // ex: "Aguardando resposta do solicitante", "Solicitação em análise"
+  acaoNome?: string // ex: "Atender", "Visualizar", "Visualizar documento(s)"
+  prazoAtendimento?: string // ex: "16 de outubro de 2026"
+  apontamentosExigencias?: string[] // O que a prefeitura apontou/exigiu
+  correcoesAtendidas?: string[] // O que foi corrigido/respondido
+  documentosAnexados?: Array<{ nome: string; tamanho?: string; tipo?: string; url?: string }>
+  fotosVistoria?: Array<{ nome: string; descricao?: string; tamanho?: string }>
+  parecerCompleto?: string
 }
 
 export interface ProtocoloItem {
   id: string
   numeroProtocolo: string
   orgao: OrgaoProtocolo
-  nomeOrgao: string // ex: "Prefeitura Municipal de Belo Horizonte", "CEMIG"
-  tipoProcesso: string // ex: "Alvará de Construção", "Projeto de Prevenção a Incêndio (AVCB)"
+  nomeOrgao: string // ex: "Prefeitura Municipal de Curitiba", "CEMIG"
+  tipoProcesso: string // ex: "Alvará de Construção", "Certificado de Conclusão de Obra (CVCO)"
   dataEntrada: string // YYYY-MM-DD
   prazoEstimado?: string // YYYY-MM-DD
   status: StatusProtocolo
@@ -193,6 +204,15 @@ export interface ProtocoloItem {
   responsavel?: string
   taskId?: string // Vinculado à tarefa correspondente da EAP
   observacoes?: string
+  
+  // Dados Específicos do Empreendimento & Imóvel
+  empreendimentoNome?: string // ex: "Edifício Hall Design", "Obra Lior", "Blanc de Rouge"
+  alvaraNumero?: string // ex: "389569"
+  indicacaoFiscal?: string // ex: "32.027.026"
+  responsavelTecnico?: string // ex: "Eng. Rafael Luiz de Medeiros - CREA PR-0000083501/D"
+  areaVistoriada?: string // ex: "7.934,60 m²"
+  totalPendencias?: number
+  totalAprovacoes?: number
 }
 
 export type CronogramaMainTab = 'tabelas' | 'gantt' | 'kanban' | 'network' | 'protocolos'
