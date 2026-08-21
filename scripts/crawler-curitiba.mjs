@@ -105,46 +105,62 @@ async function runCrawler() {
       }
 
       console.log('👉 1. Clicando em "Entrar com CPF"...')
-      await page.click('text="Entrar com CPF"', { timeout: 10000 })
-      await page.waitForTimeout(2000)
+      const btnCpf = page.locator('text="Entrar com CPF", #btnEntrarCPF').first()
+      if (await btnCpf.isVisible()) {
+        await btnCpf.click()
+        await page.waitForTimeout(1500)
+      }
 
       console.log('👉 2. Preenchendo CPF...')
+      await page.waitForSelector('#documento', { timeout: 10000 })
       await page.fill('#documento', CPF)
       await page.waitForTimeout(500)
 
       console.log('👉 3. Clicando em "Próxima"...')
-      await page.click('text="Próxima"')
+      const btnProximo = page.locator('#btnProximo, button:has-text("Próxima")').first()
+      await btnProximo.click()
       await page.waitForTimeout(3000)
 
-      // Procurar campo de senha
       console.log('👉 4. Preenchendo Senha...')
-      const senhaSelector = 'input[type="password"], #senha, #password, input[name="senha"]'
-      await page.waitForSelector(senhaSelector, { timeout: 15000 })
-      await page.fill(senhaSelector, SENHA)
+      // Aguarda campo de senha visível na tela (evita campos ocultos como campoAplicacao)
+      const senhaLocator = page.locator('input[type="password"]:visible, #senha:visible, #password:visible, input[name="senha"]:visible').first()
+      
+      try {
+        await senhaLocator.waitFor({ state: 'visible', timeout: 15000 })
+        await senhaLocator.fill(SENHA)
+      } catch (err) {
+        console.log('⚠️ Tentando seletor alternativo de senha...')
+        // Procura qualquer input visível que não seja o documento
+        const anyInput = page.locator('input:visible:not(#documento)').first()
+        await anyInput.fill(SENHA)
+      }
+
       await page.waitForTimeout(500)
 
       console.log('👉 5. Clicando em "Entrar"...')
-      const submitBtn = 'button[type="submit"], input[type="submit"], button:has-text("Entrar"), button:has-text("Acessar")'
-      await page.click(submitBtn)
+      const submitBtn = page.locator('#btnEntrar, #btnLogin, button[type="submit"]:visible, button:has-text("Entrar"):visible, button:has-text("Acessar"):visible').first()
+      await submitBtn.click()
 
       console.log('⏳ Aguardando autenticação e redirecionamento de volta ao processo...')
       await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 45000 }).catch(() => {})
       await page.waitForTimeout(5000)
 
       // Salvar cookies de sessão para as próximas execuções
-      await context.storageState({ path: SESSION_FILE })
-      console.log('💾 Sessão de login salva com sucesso em: scripts/session-curitiba.json')
+      try {
+        await context.storageState({ path: SESSION_FILE })
+        console.log('💾 Sessão de login salva com sucesso em: scripts/session-curitiba.json')
+      } catch { /* silence */ }
     }
 
     // Garantir que estamos na página do ticket
     if (!page.url().includes('/t/')) {
       console.log('🔄 Navegando diretamente para a URL do ticket...')
-      await page.goto(TICKET_URL, { waitUntil: 'networkidle', timeout: 45000 }).catch(() => {})
+      await page.goto(TICKET_URL, { waitUntil: 'domcontentloaded', timeout: 45000 }).catch(() => {})
       await page.waitForTimeout(5000)
     }
 
     console.log('⏳ Aguardando renderização completa dos componentes SYDLE...')
-    await page.waitForTimeout(6000)
+    await page.waitForTimeout(7000)
 
     // Capturar Screenshot do Resultado
     const resultScreenshot = 'scripts/curitiba-processo-resultado.png'
@@ -156,12 +172,11 @@ async function runCrawler() {
       const pageTitle = document.title || ''
       const bodyText = document.body.innerText || ''
 
-      // Extrair linhas de texto relevantes
       const lines = bodyText.split('\n').map(l => l.trim()).filter(Boolean)
 
       // Buscar status
-      const statusKeywords = ['Em Análise', 'Com Exigência', 'Aprovado', 'Concluído', 'Indeferido', 'Aguardando', 'Em Tramitação']
-      let detectedStatus = 'Em Análise'
+      const statusKeywords = ['Em Análise', 'Com Exigência', 'Aprovado', 'Concluído', 'Indeferido', 'Aguardando Vistoria', 'Em Tramitação', 'Em Andamento']
+      let detectedStatus = 'Em Tramitação'
       for (const kw of statusKeywords) {
         if (bodyText.toLowerCase().includes(kw.toLowerCase())) {
           detectedStatus = kw
@@ -169,15 +184,15 @@ async function runCrawler() {
         }
       }
 
-      // Buscar números de protocolo ou datas
+      // Buscar datas
       const dateMatches = bodyText.match(/\d{2}\/\d{2}\/\d{4}/g) || []
 
       return {
         titulo: pageTitle,
         url: window.location.href,
         statusDetectado: detectedStatus,
-        datasEncontradas: dateMatches.slice(0, 5),
-        resumoTexto: lines.slice(0, 30),
+        datasEncontradas: Array.from(new Set(dateMatches)).slice(0, 8),
+        conteudoExtraido: lines.slice(0, 40),
         dataHoraConsulta: new Date().toISOString(),
       }
     })
