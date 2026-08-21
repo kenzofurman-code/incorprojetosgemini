@@ -1,4 +1,4 @@
-﻿/**
+/**
  * scripts/crawler-curitiba.mjs
  * ─────────────────────────────────────────────────────────────────────────────
  * Robô Oficial PMC - Extração dos Subdados, PDFs e Fotos
@@ -132,19 +132,28 @@ async function runMainCrawler() {
 
     const subdadosAcoes = []
 
-    // ── 2. Clicar em cada botão individualmente ──────────────────────────────
+    // ── 2. Clicar em cada botão individualmente com ritmo calmo e seguro ────
     for (let i = 0; i < totalButtons; i++) {
       try {
         const btn = actionButtons.nth(i)
         const btnText = (await btn.innerText()).trim()
-        console.log(`\n👉 [${i + 1}/${totalButtons}] Clicando na Ação: "${btnText}"...`)
+        console.log(`\n═══════════════════════════════════════════════════════════════`)
+        console.log(`👉 [${i + 1}/${totalButtons}] Iniciando Ação: "${btnText}"...`)
+        console.log(`═══════════════════════════════════════════════════════════════`)
 
+        // 1. Rolar suavemente até o botão e aguardar estabilizar
         await btn.scrollIntoViewIfNeeded()
-        await page.waitForTimeout(500)
-        await btn.click({ force: true })
-        await page.waitForTimeout(3500)
+        await page.waitForTimeout(1500)
 
-        // Extrair texto, links e imagens do diálogo
+        // 2. Clicar no botão da ação
+        console.log('   🖱️ Clicando no botão...')
+        await btn.click({ force: true })
+
+        // 3. Aguardar o modal/diálogo abrir e renderizar completamente
+        console.log('   ⏳ Aguardando 5 segundos para o formulário carregar...')
+        await page.waitForTimeout(5000)
+
+        // 4. Extrair texto, links de PDFs e imagens do diálogo
         const dialogData = await page.evaluate(() => {
           const dialog = document.querySelector('sy-dialog, sy-sd-dialog-one-form')
           if (!dialog) return null
@@ -189,7 +198,10 @@ async function runMainCrawler() {
         })
 
         if (dialogData && dialogData.str.trim()) {
-          console.log(`   📄 Texto capturado (${dialogData.str.slice(0, 80).replace(/\n/g, ' ')}...)`)
+          console.log(`   📄 Subdado capturado (${dialogData.str.slice(0, 90).replace(/\n/g, ' ')}...)`)
+          if (dialogData.links.length > 0) {
+            console.log(`   📎 ${dialogData.links.length} arquivo(s)/link(s) encontrados no formulário.`)
+          }
           subdadosAcoes.push({
             indice: i + 1,
             acaoNome: btnText,
@@ -199,23 +211,38 @@ async function runMainCrawler() {
           })
         }
 
-        // FECHAR O MODAL COM CERTEZA
+        // 5. Fechar o diálogo com calma e aguardar desobstrução da tela
+        console.log('   🚪 Fechando modal e liberando a tela...')
+        
+        // Tentar fechar pelo botão oficial de fechar
+        const closeBtn = page.locator('sy-sd-dialog-one-form-header sy-button, sy-dialog sy-button, button:has-text("Fechar"), .sy-dialog-close').first()
+        if (await closeBtn.isVisible().catch(() => false)) {
+          await closeBtn.click({ force: true }).catch(() => {})
+        } else {
+          await page.keyboard.press('Escape')
+        }
+
+        // Limpeza de segurança para garantir que nenhum backdrop residual intercepte o próximo clique
+        await page.waitForTimeout(2000)
         await page.evaluate(() => {
           const dialogs = document.querySelectorAll('sy-dialog, .sy-dialog, sy-sd-dialog-one-form')
           dialogs.forEach(d => {
-            try {
-              d.remove() // Remove o backdrop para desobstruir a tela para o próximo clique
-            } catch {}
+            try { d.remove() } catch {}
           })
         })
-        await page.waitForTimeout(1000)
+
+        // Pausa de 3 segundos antes de iniciar o próximo botão
+        console.log('   ⏸️ Pausa de 3 segundos para estabilização...')
+        await page.waitForTimeout(3000)
 
       } catch (err) {
         console.log(`   ⚠️ Erro na ação ${i + 1}: ${err.message}`)
         await page.evaluate(() => {
-          document.querySelectorAll('sy-dialog').forEach(d => d.remove())
+          document.querySelectorAll('sy-dialog, sy-sd-dialog-one-form').forEach(d => {
+            try { d.remove() } catch {}
+          })
         }).catch(() => {})
-        await page.waitForTimeout(1000)
+        await page.waitForTimeout(3000)
       }
     }
 
