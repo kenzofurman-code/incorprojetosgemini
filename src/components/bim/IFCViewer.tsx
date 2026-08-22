@@ -722,35 +722,49 @@ export default function IFCViewer({ onIssueCreated, modelLabel, className = '', 
 
   // ─── Raycast & Click Handling ───────────────────────────────────────────────
   const handleCanvasClick = useCallback(async (e: React.MouseEvent<HTMLDivElement>) => {
+    const components = componentsRef.current
     const world = worldRef.current
     const model = currentModelRef.current
     const canvas = canvasRef.current
-    if (!world || !model || !canvas) return
+    if (!components || !world || !model || !canvas) return
 
-    // Client coordinates for That Open Platform
-    const mouseVec = new THREE.Vector2(e.clientX, e.clientY)
-
-    // Raycast on FragmentsModel
-    let res: any = null
-    try {
-      res = await model.raycast({ camera: world.camera.three, mouse: mouseVec, dom: canvas })
-    } catch (err) {
-      console.warn('[IFCViewer] model.raycast error:', err)
-    }
-
-    // Three.js Raycaster fallback/hybrid for hit point & face
+    // 1. Normalized device coordinates (-1 a +1)
     const rect = canvas.getBoundingClientRect()
     const ndcX = ((e.clientX - rect.left) / rect.width) * 2 - 1
     const ndcY = -((e.clientY - rect.top) / rect.height) * 2 + 1
+    const ndcVec = new THREE.Vector2(ndcX, ndcY)
+
+    // 2. That Open Raycaster Component
+    let res: any = null
+    try {
+      const casters = components.get(OBC.Raycasters)
+      const caster = casters.get(world)
+      if (caster) {
+        res = await caster.castRay()
+      }
+    } catch (err) {
+      console.warn('[IFCViewer] caster.castRay error:', err)
+    }
+
+    // 3. Fallback model.raycast com coordenadas NDC
+    if (!res) {
+      try {
+        res = await model.raycast({ camera: world.camera.three, mouse: ndcVec, dom: canvas })
+      } catch (err) {
+        console.warn('[IFCViewer] model.raycast error:', err)
+      }
+    }
+
+    // 4. Three.js Raycaster fallback para hit point & meshes
     const raycaster = new THREE.Raycaster()
-    raycaster.setFromCamera(new THREE.Vector2(ndcX, ndcY), world.camera.three)
+    raycaster.setFromCamera(ndcVec, world.camera.three)
     const targets: THREE.Object3D[] = [model.object, ...Array.from(world.meshes)]
     const intersects = raycaster.intersectObjects(targets, true)
 
     if (!res && intersects.length === 0) {
       if (mode === 'inspect' && !e.shiftKey) {
         setSelectedElements([])
-        await (model as any).resetColor()
+        await (model as any).resetColor?.()
       }
       return
     }
@@ -810,28 +824,47 @@ export default function IFCViewer({ onIssueCreated, modelLabel, className = '', 
           bim4d.toggleSelectElement(localId, isShift)
         }
 
-        let category = 'Elemento IFC'
-        let name = `Elemento #${localId}`
-        let guid = ''
-        let storey = ''
+        // Buscar dados já catalogados na extração inicial
+        const matchingRaw = raw4DElements.find(r => r.expressId === localId)
+
+        let category = matchingRaw?.category ? (IFC_CATEGORY_LABELS[matchingRaw.category.toUpperCase()] || matchingRaw.category) : 'Elemento IFC'
+        let name = matchingRaw?.name || `Elemento #${localId}`
+        let guid = matchingRaw?.guid || ''
+        let storey = matchingRaw?.storey || 'Pavimento Tipo'
         let volume = 0
         let area = 0
         let length = 0
+
+        const customPsets: Array<{ name: string; properties: Array<{ name: string; value: string | number | boolean }> }> = []
 
         try {
           const rawData = await model.getItemsData([localId])
           if (rawData && rawData[0]) {
             const d = rawData[0] as any
-            if (d.category) category = d.category
-            if (d.name) name = d.name
-            if (d.guid) guid = d.guid
-            if (d.storey) storey = d.storey
+            if (d.category) category = IFC_CATEGORY_LABELS[String(d.category).toUpperCase()] || d.category
+            if (d.name) name = d.name?.value || d.name
+            if (d.guid) guid = d.guid?.value || d.guid
+            if (d.storey) storey = d.storey?.value || d.storey
+
+            // Extrair propriedades adicionais
+            const propList: Array<{ name: string; value: any }> = []
+            if (d.Tag) propList.push({ name: 'Tag / Código', value: d.Tag.value || d.Tag })
+            if (d.Description) propList.push({ name: 'Descrição', value: d.Description.value || d.Description })
+            if (d.NominalDiameter) propList.push({ name: 'Diâmetro Nominal', value: d.NominalDiameter.value || d.NominalDiameter })
+            if (d.Length) propList.push({ name: 'Comprimento', value: `${Number(d.Length.value || d.Length).toFixed(2)} m` })
+
+            if (propList.length > 0) {
+              customPsets.push({
+                name: 'Parâmetros do Elemento',
+                properties: propList,
+              })
+            }
           }
         } catch { /* fallback */ }
 
         try {
           const vol = await model.getItemsVolume([localId])
-          if (typeof vol === 'number') {
+          if (typeof vol === 'number' && vol > 0) {
             volume = vol
           }
         } catch { /* fallback */ }
@@ -858,6 +891,15 @@ export default function IFCViewer({ onIssueCreated, modelLabel, className = '', 
           },
           psets: [
             {
+              name: 'Identificação & Localização',
+              properties: [
+                { name: 'Express ID', value: localId },
+                { name: 'Categoria IFC', value: category },
+                { name: 'Pavimento', value: storey },
+                { name: 'GUID Global', value: guid || 'N/A' },
+              ]
+            },
+            {
               name: 'Propriedades Geométricas',
               properties: [
                 { name: 'Largura (X)', value: `${size.x.toFixed(2)} m` },
@@ -865,7 +907,8 @@ export default function IFCViewer({ onIssueCreated, modelLabel, className = '', 
                 { name: 'Profundidade (Z)', value: `${size.z.toFixed(2)} m` },
                 { name: 'Volume Estimado', value: `${(size.x * size.y * size.z).toFixed(3)} m³` },
               ]
-            }
+            },
+            ...customPsets,
           ]
         }
 
@@ -885,12 +928,10 @@ export default function IFCViewer({ onIssueCreated, modelLabel, className = '', 
           await model.setColor([localId], HIGHLIGHT_COLOR)
         }
 
-        if (!bim4d.is4DActive) {
-          setShowDrawer(true)
-        }
+        setShowDrawer(true)
       }
     }
-  }, [mode, measurePoints, bim4d.is4DActive, bim4d.toggleSelectElement])
+  }, [mode, measurePoints, bim4d.is4DActive, bim4d.toggleSelectElement, raw4DElements])
 
   // Mouse move for 3D measurement preview line & magnetic snap indicator
   const handleCanvasMouseMove = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
