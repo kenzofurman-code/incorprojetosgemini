@@ -25,6 +25,7 @@ import {
 import * as THREE from 'three'
 import * as OBC from '@thatopen/components'
 import * as FRAGS from '@thatopen/fragments'
+import * as WebIFC from 'web-ifc'
 import {
   Upload,
   RotateCcw,
@@ -480,8 +481,8 @@ export default function IFCViewer({ onIssueCreated, modelLabel, className = '', 
     }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ─── Extract categories and real items from model ──────────────────────────
-  const extractCategories = useCallback(async (model: FRAGS.FragmentsModel) => {
+  // ─── Extract categories and real items with building storeys ───────────────
+  const extractCategories = useCallback(async (model: FRAGS.FragmentsModel, elementToStoreyMap?: Map<number, string>) => {
     try {
       const rawCategories = await model.getCategories()
       const list: BIMCategoryItem[] = []
@@ -527,7 +528,7 @@ export default function IFCViewer({ onIssueCreated, modelLabel, className = '', 
               const d = (dataList && dataList[idx]) ? (dataList[idx] as any) : {}
               const guid = d.GlobalId?.value || d.guid || `guid-${catName}-${id}`
               const name = d.Name?.value || d.name || `${displayName} #${id}`
-              const storey = d.storey || 'Pavimento Tipo'
+              const storey = (elementToStoreyMap && elementToStoreyMap.get(id)) || d.storey || 'Pavimento Tipo'
               allItemsList.push({
                 expressId: id,
                 guid,
@@ -539,12 +540,13 @@ export default function IFCViewer({ onIssueCreated, modelLabel, className = '', 
             })
           } catch {
             itemIds.forEach(id => {
+              const storey = (elementToStoreyMap && elementToStoreyMap.get(id)) || 'Pavimento Tipo'
               allItemsList.push({
                 expressId: id,
                 guid: `guid-${catName}-${id}`,
                 category: catName,
                 name: `${displayName} #${id}`,
-                storey: 'Pavimento Tipo',
+                storey,
                 material: 'Padrão IFC',
               })
             })
@@ -579,6 +581,48 @@ export default function IFCViewer({ onIssueCreated, modelLabel, className = '', 
       const buffer = await file.arrayBuffer()
       const uint8 = new Uint8Array(buffer)
 
+      // Extração precisa de Pavimentos (IfcBuildingStorey) e relação de contenção espacial
+      const elementToStorey = new Map<number, string>()
+      try {
+        const ifcApi = new WebIFC.IfcAPI()
+        ifcApi.SetWasmPath('/wasm/web-ifc/')
+        await ifcApi.Init()
+        const ifcModelId = ifcApi.OpenModel(uint8)
+
+        const storeyMap = new Map<number, string>()
+        const storeys = ifcApi.GetLineIDsWithType(ifcModelId, WebIFC.IFCBUILDINGSTOREY)
+        for (let i = 0; i < storeys.size(); i++) {
+          const sId = storeys.get(i)
+          const line = ifcApi.GetLine(ifcModelId, sId)
+          const rawName = line.Name?.value || line.LongName?.value || `Pavimento #${sId}`
+          const sName = rawName
+            .replace(/\\X\\C9/gi, 'É')
+            .replace(/\\X\\C3/gi, 'Ã')
+            .replace(/\\X\\CD/gi, 'Í')
+            .replace(/\\X\\C1/gi, 'Á')
+            .replace(/\\X\\D3/gi, 'Ó')
+            .replace(/\\X\\CA/gi, 'Ê')
+          storeyMap.set(sId, sName)
+        }
+
+        const rels = ifcApi.GetLineIDsWithType(ifcModelId, WebIFC.IFCRELCONTAINEDINSPATIALSTRUCTURE)
+        for (let i = 0; i < rels.size(); i++) {
+          const relId = rels.get(i)
+          const rel = ifcApi.GetLine(ifcModelId, relId)
+          const sId = rel.RelatingStructure?.value
+          const sName = storeyMap.get(sId) || 'Pavimento Tipo'
+          const related = rel.RelatedElements || []
+          for (const item of related) {
+            if (typeof item.value === 'number') {
+              elementToStorey.set(item.value, sName)
+            }
+          }
+        }
+        ifcApi.CloseModel(ifcModelId)
+      } catch (err) {
+        console.warn('[IFCViewer] Erro ao extrair pavimentos espaciais com WebIFC:', err)
+      }
+
       const model = await ifcLoader.load(uint8, true, file.name)
       currentModelRef.current = model
 
@@ -604,7 +648,7 @@ export default function IFCViewer({ onIssueCreated, modelLabel, className = '', 
         )
       }
 
-      await extractCategories(model)
+      await extractCategories(model, elementToStorey)
       setLoadedModelName(file.name)
     } catch (err) {
       console.error('[IFCViewer] loadIFC error:', err)
