@@ -56,6 +56,7 @@ import BIM4DElementsPanel from './BIM4D/BIM4DElementsPanel'
 import BIM4DSchedulePanel from './BIM4D/BIM4DSchedulePanel'
 import BIM4DTimelinePlayer from './BIM4D/BIM4DTimelinePlayer'
 import BIM4DImportModal from './BIM4D/BIM4DImportModal'
+import type { BIMElementGroup } from '../../types/bim4d'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -936,6 +937,103 @@ export default function IFCViewer({ onIssueCreated, modelLabel, className = '', 
     await model.setVisible(ids, true)
   }, [])
 
+  // Isolamento de Pavimento no 3D
+  const handleIsolateStorey = useCallback(async (storeyName: string) => {
+    const model = currentModelRef.current
+    const world = worldRef.current
+    if (!model) return
+
+    const allIds = raw4DElements.map(e => e.expressId)
+    if (allIds.length === 0) return
+
+    if (storeyName === 'todos') {
+      await model.setVisible(allIds, true)
+      await (model as any).resetColor?.()
+      return
+    }
+
+    const storeyElementIds = raw4DElements
+      .filter(e => e.storey === storeyName)
+      .map(e => e.expressId)
+
+    const otherElementIds = raw4DElements
+      .filter(e => e.storey !== storeyName)
+      .map(e => e.expressId)
+
+    if (otherElementIds.length > 0) {
+      await model.setVisible(otherElementIds, false)
+    }
+    if (storeyElementIds.length > 0) {
+      await model.setVisible(storeyElementIds, true)
+      await (model as any).resetColor?.()
+      await model.setColor(storeyElementIds, new THREE.Color(0x0284c7))
+
+      if (world) {
+        try {
+          const bbox = await model.getMergedBox(storeyElementIds)
+          if (bbox && !bbox.isEmpty()) {
+            const center = bbox.getCenter(new THREE.Vector3())
+            const size = bbox.getSize(new THREE.Vector3())
+            const maxDim = Math.max(size.x, size.y, size.z, 2)
+            await world.camera.controls.setLookAt(
+              center.x + maxDim * 1.2,
+              center.y + maxDim * 0.8,
+              center.z + maxDim * 1.2,
+              center.x, center.y, center.z,
+              true
+            )
+          }
+        } catch {}
+      }
+    }
+  }, [raw4DElements])
+
+  // Isolamento de Grupo Específico no 3D
+  const handleIsolateGroup = useCallback(async (group: BIMElementGroup) => {
+    const model = currentModelRef.current
+    const world = worldRef.current
+    if (!model) return
+
+    const allIds = raw4DElements.map(e => e.expressId)
+    const otherElementIds = allIds.filter(id => !group.expressIds.includes(id))
+
+    if (otherElementIds.length > 0) {
+      await model.setVisible(otherElementIds, false)
+    }
+    await model.setVisible(group.expressIds, true)
+    await (model as any).resetColor?.()
+    await model.setColor(group.expressIds, new THREE.Color(0xf59e0b))
+
+    if (world) {
+      try {
+        const bbox = await model.getMergedBox(group.expressIds)
+        if (bbox && !bbox.isEmpty()) {
+          const center = bbox.getCenter(new THREE.Vector3())
+          const size = bbox.getSize(new THREE.Vector3())
+          const maxDim = Math.max(size.x, size.y, size.z, 2)
+          await world.camera.controls.setLookAt(
+            center.x + maxDim * 1.2,
+            center.y + maxDim * 0.8,
+            center.z + maxDim * 1.2,
+            center.x, center.y, center.z,
+            true
+          )
+        }
+      } catch {}
+    }
+  }, [raw4DElements])
+
+  // Restaurar todos os elementos no 3D
+  const handleShowAll4D = useCallback(async () => {
+    const model = currentModelRef.current
+    if (!model) return
+    const allIds = raw4DElements.map(e => e.expressId)
+    if (allIds.length > 0) {
+      await model.setVisible(allIds, true)
+      await (model as any).resetColor?.()
+    }
+  }, [raw4DElements])
+
   const handleHide = useCallback(async (elements: SelectedBIMElement[]) => {
     const model = currentModelRef.current
     if (!model || elements.length === 0) return
@@ -1231,6 +1329,9 @@ export default function IFCViewer({ onIssueCreated, modelLabel, className = '', 
               onSelectAll={bim4d.selectAllElements}
               onClearSelection={bim4d.clearSelection}
               onAutoVincular={bim4d.autoVincularPorNome}
+              onIsolateStorey={handleIsolateStorey}
+              onIsolateGroup={handleIsolateGroup}
+              onShowAll={handleShowAll4D}
             />
           )}
 

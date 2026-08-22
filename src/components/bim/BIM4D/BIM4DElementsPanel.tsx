@@ -2,15 +2,16 @@ import { useState, useMemo } from 'react'
 import {
   Layers,
   Search,
-  Filter,
   CheckSquare,
   Square,
-  Building2,
   Box,
   Link,
   ChevronDown,
   ChevronRight,
   Sparkles,
+  Eye,
+  EyeOff,
+  RotateCcw,
 } from 'lucide-react'
 import type { BIMElementGroup } from '../../../types/bim4d'
 
@@ -21,6 +22,9 @@ export interface BIM4DElementsPanelProps {
   onSelectAll: () => void
   onClearSelection: () => void
   onAutoVincular: () => void
+  onIsolateStorey?: (storeyName: string) => void
+  onIsolateGroup?: (group: BIMElementGroup) => void
+  onShowAll?: () => void
 }
 
 export default function BIM4DElementsPanel({
@@ -30,6 +34,9 @@ export default function BIM4DElementsPanel({
   onSelectAll,
   onClearSelection,
   onAutoVincular,
+  onIsolateStorey,
+  onIsolateGroup,
+  onShowAll,
 }: BIM4DElementsPanelProps) {
   const [search, setSearch] = useState('')
   const [selectedStorey, setSelectedStorey] = useState<string>('todos')
@@ -82,14 +89,10 @@ export default function BIM4DElementsPanel({
     })
   }, [elementGroups, selectedStorey, selectedCategory, filterLinked, search])
 
-  // Total de elementos selecionados
+  // Total de elementos
   const totalElementsCount = useMemo(() => {
     return elementGroups.reduce((acc, g) => acc + g.count, 0)
   }, [elementGroups])
-
-  const totalFilteredElements = useMemo(() => {
-    return filteredGroups.reduce((acc, g) => acc + g.count, 0)
-  }, [filteredGroups])
 
   function toggleExpandGroup(groupId: string) {
     setExpandedGroups(prev => {
@@ -98,6 +101,13 @@ export default function BIM4DElementsPanel({
       else next.add(groupId)
       return next
     })
+  }
+
+  function handleStoreyChange(newStorey: string) {
+    setSelectedStorey(newStorey)
+    if (onIsolateStorey) {
+      onIsolateStorey(newStorey)
+    }
   }
 
   return (
@@ -143,32 +153,58 @@ export default function BIM4DElementsPanel({
 
         {/* Filtros Rápidos */}
         <div className="grid grid-cols-2 gap-1.5 mt-2">
-          <select
-            value={selectedStorey}
-            onChange={e => setSelectedStorey(e.target.value)}
-            className="text-[11px] bg-slate-900 border border-slate-700/70 rounded-md px-2 py-1 text-slate-300 focus:outline-none focus:border-orange-500"
-          >
-            <option value="todos">Todos Pavimentos</option>
-            {availableStoreys.map(st => (
-              <option key={st} value={st}>
-                {st}
-              </option>
-            ))}
-          </select>
+          <div>
+            <label className="block text-[9px] font-bold text-slate-400 mb-0.5 uppercase">
+              Pavimento
+            </label>
+            <select
+              value={selectedStorey}
+              onChange={e => handleStoreyChange(e.target.value)}
+              className="w-full text-[11px] bg-slate-900 border border-slate-700/70 rounded-md px-2 py-1 text-slate-200 focus:outline-none focus:border-orange-500 font-semibold"
+            >
+              <option value="todos">Todos Pavimentos</option>
+              {availableStoreys.map(st => (
+                <option key={st} value={st}>
+                  {st}
+                </option>
+              ))}
+            </select>
+          </div>
 
-          <select
-            value={selectedCategory}
-            onChange={e => setSelectedCategory(e.target.value)}
-            className="text-[11px] bg-slate-900 border border-slate-700/70 rounded-md px-2 py-1 text-slate-300 focus:outline-none focus:border-orange-500"
-          >
-            <option value="todas">Todas Categorias</option>
-            {availableCategories.map(cat => (
-              <option key={cat} value={cat}>
-                {cat}
-              </option>
-            ))}
-          </select>
+          <div>
+            <label className="block text-[9px] font-bold text-slate-400 mb-0.5 uppercase">
+              Categoria
+            </label>
+            <select
+              value={selectedCategory}
+              onChange={e => setSelectedCategory(e.target.value)}
+              className="w-full text-[11px] bg-slate-900 border border-slate-700/70 rounded-md px-2 py-1 text-slate-200 focus:outline-none focus:border-orange-500"
+            >
+              <option value="todas">Todas Categorias</option>
+              {availableCategories.map(cat => (
+                <option key={cat} value={cat}>
+                  {cat}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
+
+        {/* Botão de Restaurar Todos os Elementos */}
+        {selectedStorey !== 'todos' && (
+          <div className="mt-2">
+            <button
+              onClick={() => {
+                setSelectedStorey('todos')
+                if (onShowAll) onShowAll()
+              }}
+              className="w-full flex items-center justify-center gap-1.5 py-1 px-2 rounded-lg bg-blue-600/20 hover:bg-blue-600/30 border border-blue-500/40 text-blue-300 text-[10px] font-bold transition-colors cursor-pointer"
+            >
+              <RotateCcw size={11} />
+              <span>Mostrar Todos os Pavimentos no 3D</span>
+            </button>
+          </div>
+        )}
 
         {/* Ações de Seleção em Lote */}
         <div className="flex items-center justify-between mt-2.5 pt-2 border-t border-slate-800/60 text-[11px]">
@@ -203,7 +239,7 @@ export default function BIM4DElementsPanel({
             <Box size={28} className="mb-2 text-slate-600" />
             <p className="text-xs font-semibold text-slate-400">Nenhum elemento encontrado</p>
             <p className="text-[10px] text-slate-600 mt-0.5">
-              Ajuste os filtros de busca ou verifique se o modelo IFC foi carregado.
+              Ajuste os filtros de busca ou selecione &quot;Todos Pavimentos&quot;.
             </p>
           </div>
         ) : (
@@ -261,7 +297,22 @@ export default function BIM4DElementsPanel({
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-1.5 flex-shrink-0">
+                  <div className="flex items-center gap-1 flex-shrink-0">
+                    {/* Botão de Isolar Grupo no 3D */}
+                    {onIsolateGroup && (
+                      <button
+                        type="button"
+                        onClick={e => {
+                          e.stopPropagation()
+                          onIsolateGroup(group)
+                        }}
+                        className="p-1 rounded hover:bg-blue-500/20 text-slate-400 hover:text-blue-300 transition-colors"
+                        title="Isolar este grupo no modelo 3D"
+                      >
+                        <Eye size={13} />
+                      </button>
+                    )}
+
                     {group.isLinked ? (
                       <span
                         className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 flex items-center gap-1"
