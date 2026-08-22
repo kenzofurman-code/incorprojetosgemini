@@ -418,12 +418,21 @@ export default function IFCViewer({ onIssueCreated, modelLabel, className = '', 
         const grids = components.get(OBC.Grids)
         grids.create(world)
 
-        // Lights
-        const ambientLight = new THREE.AmbientLight(0xffffff, 0.8)
-        world.scene.three.add(ambientLight)
-        const dirLight = new THREE.DirectionalLight(0xffffff, 1.5)
-        dirLight.position.set(10, 20, 10)
-        world.scene.three.add(dirLight)
+        // Lights: Configuração Arquitetônica Multidirecional (sombra, profundidade e contraste entre faces)
+        const hemiLight = new THREE.HemisphereLight(0xf8fafc, 0x1e293b, 0.75)
+        world.scene.three.add(hemiLight)
+
+        const dirLight1 = new THREE.DirectionalLight(0xfffbeb, 1.1)
+        dirLight1.position.set(60, 100, 50)
+        world.scene.three.add(dirLight1)
+
+        const dirLight2 = new THREE.DirectionalLight(0xe2e8f0, 0.45)
+        dirLight2.position.set(-60, 50, -40)
+        world.scene.three.add(dirLight2)
+
+        const upLight = new THREE.DirectionalLight(0x94a3b8, 0.25)
+        upLight.position.set(0, -50, 0)
+        world.scene.three.add(upLight)
 
         // Fragments & IFC Loader
         const fragments = components.get(OBC.FragmentsManager)
@@ -629,11 +638,65 @@ export default function IFCViewer({ onIssueCreated, modelLabel, className = '', 
       currentModelRef.current = model
 
       world.scene.three.add(model.object)
+
+      // Criar arestas arquitetônicas (linhas de contorno pretas/grafite em vigas, pilares e lajes)
+      const edgesGroup = new THREE.Group()
+      edgesGroup.name = 'BIM_EDGES'
+
       model.object.traverse(child => {
         if (child instanceof THREE.Mesh) {
           world.meshes.add(child)
+
+          // Ajuste de materiais para evitar superexposição plana
+          if (child.material) {
+            const mats = Array.isArray(child.material) ? child.material : [child.material]
+            for (const m of mats) {
+              if (m && typeof m === 'object') {
+                if ('roughness' in m) (m as any).roughness = 0.6
+                if ('metalness' in m) (m as any).metalness = 0.05
+              }
+            }
+          }
+
+          // Arestas para InstancedMesh e Mesh comum
+          if (child instanceof THREE.InstancedMesh && child.geometry) {
+            try {
+              const edgesGeom = new THREE.EdgesGeometry(child.geometry, 24)
+              const edgeMat = new THREE.LineBasicMaterial({
+                color: 0x334155,
+                transparent: true,
+                opacity: 0.5,
+              })
+              for (let i = 0; i < child.count; i++) {
+                const mat = new THREE.Matrix4()
+                child.getMatrixAt(i, mat)
+                const lines = new THREE.LineSegments(edgesGeom, edgeMat)
+                lines.applyMatrix4(mat)
+                lines.raycast = () => {}
+                edgesGroup.add(lines)
+              }
+            } catch {}
+          } else if (child.geometry && !(child instanceof THREE.LineSegments)) {
+            try {
+              const edgesGeom = new THREE.EdgesGeometry(child.geometry, 24)
+              const edgeMat = new THREE.LineBasicMaterial({
+                color: 0x334155,
+                transparent: true,
+                opacity: 0.5,
+              })
+              const lines = new THREE.LineSegments(edgesGeom, edgeMat)
+              lines.matrixAutoUpdate = false
+              lines.matrix.copy(child.matrixWorld)
+              lines.raycast = () => {}
+              edgesGroup.add(lines)
+            } catch {}
+          }
         }
       })
+
+      if (edgesGroup.children.length > 0) {
+        world.scene.three.add(edgesGroup)
+      }
 
       // Fit camera
       const bbox = new THREE.Box3().setFromObject(model.object)
