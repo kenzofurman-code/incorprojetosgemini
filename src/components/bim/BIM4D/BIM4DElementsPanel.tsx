@@ -10,6 +10,7 @@ import {
   ChevronRight,
   Sparkles,
   Eye,
+  EyeOff,
   RotateCcw,
 } from 'lucide-react'
 import type { BIMElementGroup } from '../../../types/bim4d'
@@ -46,6 +47,10 @@ export default function BIM4DElementsPanel({
   const [selectedCategory, setSelectedCategory] = useState<string>('todas')
   const [filterLinked, setFilterLinked] = useState<'todos' | 'vinculados' | 'sem_vinculo'>('todos')
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set())
+  const [isolatedTarget, setIsolatedTarget] = useState<{
+    type: 'storey' | 'group' | 'item'
+    id: string | number
+  } | null>(null)
 
   // Opções únicas de pavimentos e categorias para os filtros
   const availableStoreys = useMemo(() => {
@@ -109,10 +114,44 @@ export default function BIM4DElementsPanel({
 
   function handleStoreyChange(newStorey: string) {
     setSelectedStorey(newStorey)
-    if (onIsolateStorey) {
-      onIsolateStorey(newStorey)
+    if (newStorey === 'todos') {
+      setIsolatedTarget(null)
+      onShowAll?.()
+    } else {
+      setIsolatedTarget({ type: 'storey', id: newStorey })
+      onIsolateStorey?.(newStorey)
     }
   }
+
+  function handleRestoreAll() {
+    setSelectedStorey('todos')
+    setIsolatedTarget(null)
+    onShowAll?.()
+  }
+
+  function handleToggleGroupIsolate(group: BIMElementGroup) {
+    if (isolatedTarget?.type === 'group' && isolatedTarget.id === group.id) {
+      // Já está isolado -> desfaz e mostra tudo
+      setIsolatedTarget(null)
+      onShowAll?.()
+    } else {
+      setIsolatedTarget({ type: 'group', id: group.id })
+      onIsolateGroup?.(group)
+    }
+  }
+
+  function handleToggleItemIsolate(expressId: number) {
+    if (isolatedTarget?.type === 'item' && isolatedTarget.id === expressId) {
+      // Já está isolado -> desfaz e mostra tudo
+      setIsolatedTarget(null)
+      onShowAll?.()
+    } else {
+      setIsolatedTarget({ type: 'item', id: expressId })
+      onIsolateSingleItem?.(expressId)
+    }
+  }
+
+  const isAnyFilteredOrIsolated = isolatedTarget !== null || selectedStorey !== 'todos'
 
   return (
     <div className="flex flex-col h-full bg-slate-900/95 border-r border-slate-800 w-80 flex-shrink-0 text-slate-200 select-none shadow-2xl backdrop-blur-md">
@@ -194,18 +233,16 @@ export default function BIM4DElementsPanel({
           </div>
         </div>
 
-        {/* Botão de Restaurar Todos os Elementos */}
-        {selectedStorey !== 'todos' && (
+        {/* Botão de Restaurar Modelo Completo */}
+        {isAnyFilteredOrIsolated && (
           <div className="mt-2">
             <button
-              onClick={() => {
-                setSelectedStorey('todos')
-                if (onShowAll) onShowAll()
-              }}
-              className="w-full flex items-center justify-center gap-1.5 py-1 px-2 rounded-lg bg-blue-600/20 hover:bg-blue-600/30 border border-blue-500/40 text-blue-300 text-[10px] font-bold transition-colors cursor-pointer"
+              onClick={handleRestoreAll}
+              className="w-full flex items-center justify-center gap-1.5 py-1.5 px-2 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 text-emerald-300 text-[11px] font-bold transition-all shadow-sm cursor-pointer animate-pulse"
+              title="Restaura a visibilidade de todas as peças e pavimentos do modelo 3D"
             >
-              <RotateCcw size={11} />
-              <span>Mostrar Todos os Pavimentos no 3D</span>
+              <RotateCcw size={12} />
+              <span>Restaurar Desenho Completo (Ver Tudo)</span>
             </button>
           </div>
         )}
@@ -243,7 +280,7 @@ export default function BIM4DElementsPanel({
             <Box size={28} className="mb-2 text-slate-600" />
             <p className="text-xs font-semibold text-slate-400">Nenhum elemento encontrado</p>
             <p className="text-[10px] text-slate-600 mt-0.5">
-              Ajuste os filtros de busca ou selecione &quot;Todos Pavimentos&quot;.
+              Ajuste os filtros de busca ou clique em &quot;Restaurar Desenho Completo&quot;.
             </p>
           </div>
         ) : (
@@ -252,12 +289,16 @@ export default function BIM4DElementsPanel({
             const isPartiallySelected =
               !isGroupSelected && group.expressIds.some(id => selectedElementIds.has(id))
             const isExpanded = expandedGroups.has(group.id)
+            const isThisGroupIsolated =
+              isolatedTarget?.type === 'group' && isolatedTarget.id === group.id
 
             return (
               <div
                 key={group.id}
                 className={`rounded-xl border transition-all ${
-                  isGroupSelected
+                  isThisGroupIsolated
+                    ? 'bg-blue-600/15 border-blue-500/60 ring-1 ring-blue-500/40 shadow-md'
+                    : isGroupSelected
                     ? 'bg-orange-500/10 border-orange-500/40 shadow-sm'
                     : isPartiallySelected
                     ? 'bg-slate-800/60 border-slate-700'
@@ -301,19 +342,34 @@ export default function BIM4DElementsPanel({
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-1 flex-shrink-0">
-                    {/* Botão de Isolar Grupo no 3D */}
+                  <div className="flex items-center gap-1.5 flex-shrink-0">
+                    {/* Botão de Isolar/Restaurar Grupo no 3D com Olhinho Interativo */}
                     {onIsolateGroup && (
                       <button
                         type="button"
                         onClick={e => {
                           e.stopPropagation()
-                          onIsolateGroup(group)
+                          handleToggleGroupIsolate(group)
                         }}
-                        className="p-1 rounded hover:bg-blue-500/20 text-slate-400 hover:text-blue-300 transition-colors cursor-pointer"
-                        title="Isolar este grupo no modelo 3D"
+                        className={`p-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1 cursor-pointer ${
+                          isThisGroupIsolated
+                            ? 'bg-red-500/25 border border-red-500/50 text-red-300 hover:bg-red-500/35 shadow-sm'
+                            : 'bg-slate-800/80 hover:bg-blue-600/30 text-slate-300 hover:text-blue-200 border border-slate-700/60'
+                        }`}
+                        title={
+                          isThisGroupIsolated
+                            ? 'Clique para desmarcar isolamento e mostrar todo o modelo'
+                            : 'Isolar apenas este grupo no modelo 3D'
+                        }
                       >
-                        <Eye size={13} />
+                        {isThisGroupIsolated ? (
+                          <>
+                            <EyeOff size={13} className="text-red-400" />
+                            <span className="text-[9px] text-red-300">Isolado</span>
+                          </>
+                        ) : (
+                          <Eye size={13} />
+                        )}
                       </button>
                     )}
 
@@ -354,13 +410,17 @@ export default function BIM4DElementsPanel({
                     </div>
                     {group.items.map(item => {
                       const isItemChecked = selectedElementIds.has(item.expressId)
+                      const isThisItemIsolated =
+                        isolatedTarget?.type === 'item' && isolatedTarget.id === item.expressId
 
                       return (
                         <div
                           key={item.expressId}
                           onClick={() => onToggleSelectItem?.(item.expressId)}
                           className={`py-1.5 px-1 flex items-center justify-between gap-2 text-[10px] rounded transition-colors cursor-pointer ${
-                            isItemChecked
+                            isThisItemIsolated
+                              ? 'bg-blue-600/20 text-blue-200 border border-blue-500/40 font-bold'
+                              : isItemChecked
                               ? 'bg-orange-500/15 text-orange-200 font-semibold'
                               : 'text-slate-300 hover:bg-slate-900/90'
                           }`}
@@ -394,18 +454,33 @@ export default function BIM4DElementsPanel({
                             </div>
                           </div>
 
-                          {/* Botão de Isolar Peça Individual no 3D */}
+                          {/* Botão de Isolar/Restaurar Peça Individual no 3D */}
                           {onIsolateSingleItem && (
                             <button
                               type="button"
                               onClick={e => {
                                 e.stopPropagation()
-                                onIsolateSingleItem(item.expressId)
+                                handleToggleItemIsolate(item.expressId)
                               }}
-                              className="p-1 rounded hover:bg-blue-500/20 text-slate-400 hover:text-blue-300 transition-colors flex-shrink-0"
-                              title={`Isolar apenas a peça #${item.expressId} no 3D`}
+                              className={`p-1 rounded-md text-[9px] transition-colors flex-shrink-0 flex items-center gap-1 ${
+                                isThisItemIsolated
+                                  ? 'bg-red-500/30 text-red-300 border border-red-500/50'
+                                  : 'hover:bg-blue-500/20 text-slate-400 hover:text-blue-300'
+                              }`}
+                              title={
+                                isThisItemIsolated
+                                  ? 'Clique para desmarcar isolamento e mostrar todo o modelo'
+                                  : `Isolar apenas a peça #${item.expressId} no 3D`
+                              }
                             >
-                              <Eye size={12} />
+                              {isThisItemIsolated ? (
+                                <>
+                                  <EyeOff size={11} className="text-red-400" />
+                                  <span className="text-[8px] text-red-300">Isolada</span>
+                                </>
+                              ) : (
+                                <Eye size={12} />
+                              )}
                             </button>
                           )}
                         </div>

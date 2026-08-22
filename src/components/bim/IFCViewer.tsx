@@ -1130,12 +1130,57 @@ export default function IFCViewer({ onIssueCreated, modelLabel, className = '', 
   const handleShowAll4D = useCallback(async () => {
     const model = currentModelRef.current
     if (!model) return
-    const allIds = raw4DElements.map(e => e.expressId)
-    if (allIds.length > 0) {
-      await model.setVisible(allIds, true)
-      await (model as any).resetColor?.()
+    try {
+      if (typeof (model as any).resetVisible === 'function') {
+        await (model as any).resetVisible()
+      }
+      if (typeof (model as any).resetColor === 'function') {
+        await (model as any).resetColor()
+      }
+      const allIds = raw4DElements.map(e => e.expressId)
+      if (allIds.length > 0 && typeof (model as any).setVisible === 'function') {
+        await (model as any).setVisible(allIds, true)
+      }
+    } catch (err) {
+      console.warn('[IFCViewer] Erro em handleShowAll4D:', err)
     }
   }, [raw4DElements])
+
+  // Escuta nativa direta no elemento <canvas> do Three.js para clique esquerdo de seleção
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+
+    let isDown = false
+    let startX = 0
+    let startY = 0
+
+    const onPointerDown = (e: PointerEvent) => {
+      if (e.button === 0) {
+        isDown = true
+        startX = e.clientX
+        startY = e.clientY
+      }
+    }
+
+    const onPointerUp = (e: PointerEvent) => {
+      if (isDown && e.button === 0) {
+        isDown = false
+        const dist = Math.hypot(e.clientX - startX, e.clientY - startY)
+        if (dist < 8) {
+          handleCanvasClick(e as unknown as React.MouseEvent<HTMLDivElement>)
+        }
+      }
+    }
+
+    canvas.addEventListener('pointerdown', onPointerDown)
+    canvas.addEventListener('pointerup', onPointerUp)
+
+    return () => {
+      canvas.removeEventListener('pointerdown', onPointerDown)
+      canvas.removeEventListener('pointerup', onPointerUp)
+    }
+  }, [handleCanvasClick, initialized])
 
   const handleHide = useCallback(async (elements: SelectedBIMElement[]) => {
     const model = currentModelRef.current
