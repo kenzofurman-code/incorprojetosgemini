@@ -800,23 +800,38 @@ export default function IFCViewer({ onIssueCreated, modelLabel, className = '', 
 
     // ── MODE: INSPECT / ORBIT / 4D (Selection & QTO) ──
     if (mode === 'inspect' || mode === 'orbit' || bim4d.is4DActive) {
-      let localId = res && typeof res.localId === 'number' ? res.localId : null
+      let rawId = res && typeof res.localId === 'number' ? res.localId : null
 
       // Fallback localId extraction from Fragment mesh if res.localId is null
-      if (localId === null && hit?.object) {
+      if (rawId === null && hit?.object) {
         try {
           const mesh = hit.object as any
           if (mesh.fragment && typeof mesh.fragment.getItemID === 'function' && typeof (hit as any).instanceId === 'number') {
-            localId = mesh.fragment.getItemID((hit as any).instanceId)
+            rawId = mesh.fragment.getItemID((hit as any).instanceId)
           } else if (mesh.fragment?.itemIds && typeof (hit as any).instanceId === 'number' && mesh.fragment.itemIds[(hit as any).instanceId] !== undefined) {
-            localId = mesh.fragment.itemIds[(hit as any).instanceId]
+            rawId = mesh.fragment.itemIds[(hit as any).instanceId]
+          } else if (typeof (hit as any).instanceId === 'number' && mesh.userData?.itemIds) {
+            rawId = mesh.userData.itemIds[(hit as any).instanceId] || mesh.userData.itemIds[0]
           } else if (mesh.userData?.itemIds && mesh.userData.itemIds.length > 0) {
-            localId = mesh.userData.itemIds[0]
+            rawId = mesh.userData.itemIds[0]
           }
         } catch { /* ignore */ }
       }
 
-      if (localId !== null) {
+      if (rawId !== null) {
+        // Converter itemId do FragmentMesh para o localId real do IFC
+        let localId = rawId
+        try {
+          if (typeof (model as any).getLocalIdsFromItemIds === 'function') {
+            const mapped = await (model as any).getLocalIdsFromItemIds([rawId])
+            if (mapped && mapped.length > 0 && typeof mapped[0] === 'number') {
+              localId = mapped[0]
+            }
+          }
+        } catch (err) {
+          console.warn('[IFCViewer] Erro ao mapear getLocalIdsFromItemIds:', err)
+        }
+
         const isShift = e.shiftKey
 
         // Se o modo 4D estiver ativo, atualiza a seleção do 4D
@@ -869,9 +884,23 @@ export default function IFCViewer({ onIssueCreated, modelLabel, className = '', 
           }
         } catch { /* fallback */ }
 
-        const bbox = new THREE.Box3()
-        if (hit?.object) bbox.setFromObject(hit.object)
-        const size = bbox.getSize(new THREE.Vector3())
+        // Caixa delimitadora exata do elemento específico
+        let size = new THREE.Vector3(0, 0, 0)
+        try {
+          const bbox = await model.getMergedBox([localId])
+          if (bbox && !bbox.isEmpty()) {
+            size = bbox.getSize(new THREE.Vector3())
+          } else if (hit?.object) {
+            const objBbox = new THREE.Box3().setFromObject(hit.object)
+            size = objBbox.getSize(new THREE.Vector3())
+          }
+        } catch {
+          if (hit?.object) {
+            const objBbox = new THREE.Box3().setFromObject(hit.object)
+            size = objBbox.getSize(new THREE.Vector3())
+          }
+        }
+
         length = Math.max(size.x, size.y, size.z)
         area = (size.x * size.y) || (size.x * size.z)
 
@@ -917,14 +946,14 @@ export default function IFCViewer({ onIssueCreated, modelLabel, className = '', 
             const exists = prev.some(el => el.expressId === localId)
             const updated = exists ? prev.filter(el => el.expressId !== localId) : [...prev, elementData]
             const ids = updated.map(u => u.expressId)
-            ;(model as any).resetColor().then(() => {
+            ;(model as any).resetColor?.().then(() => {
               if (ids.length > 0) model.setColor(ids, HIGHLIGHT_COLOR)
             })
             return updated
           })
         } else {
           setSelectedElements([elementData])
-          await (model as any).resetColor()
+          await (model as any).resetColor?.()
           await model.setColor([localId], HIGHLIGHT_COLOR)
         }
 
@@ -967,16 +996,13 @@ export default function IFCViewer({ onIssueCreated, modelLabel, className = '', 
     const model = currentModelRef.current
     if (!model || elements.length === 0) return
     const ids = elements.map(e => e.expressId)
-    const categoriesList = await model.getCategories()
-    const allIdsMap = await model.getItemsOfCategories(categoriesList.map(c => new RegExp(`^${c}$`, 'i')))
-    const allIds: number[] = []
-    for (const catIds of Object.values(allIdsMap as Record<string, number[]>)) {
-      if (Array.isArray(catIds)) allIds.push(...catIds)
-    }
-    const toHide = allIds.filter(id => !ids.includes(id))
-    if (toHide.length > 0) await model.setVisible(toHide, false)
+    const allIds = raw4DElements.map(e => e.expressId)
+    const otherIds = allIds.filter(id => !ids.includes(id))
+    if (otherIds.length > 0) await model.setVisible(otherIds, false)
     await model.setVisible(ids, true)
-  }, [])
+    await (model as any).resetColor?.()
+    await model.setColor(ids, HIGHLIGHT_COLOR)
+  }, [raw4DElements])
 
   // Isolamento de Pavimento no 3D
   const handleIsolateStorey = useCallback(async (storeyName: string) => {
