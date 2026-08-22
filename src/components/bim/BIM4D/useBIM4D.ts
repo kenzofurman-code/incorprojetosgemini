@@ -268,6 +268,31 @@ export function useBIM4D({ model, rawElements }: UseBIM4DProps) {
     }
   }, [is4DActive, model, apply4DVisuals, playerState.currentDate])
 
+  // Destaque visual imediato no 3D para elementos selecionados
+  useEffect(() => {
+    if (!model || !is4DActive) return
+
+    const updateSelectionHighlight = async () => {
+      try {
+        if (selectedElementIds.size > 0) {
+          const ids = Array.from(selectedElementIds)
+          if (typeof (model as any).resetColor === 'function') {
+            await (model as any).resetColor()
+          }
+          if (typeof (model as any).setColor === 'function') {
+            await (model as any).setColor(ids, { r: 0.02, g: 0.71, b: 0.83 }) // Ciano neon
+          }
+        } else {
+          apply4DVisuals(playerState.currentDate)
+        }
+      } catch (err) {
+        console.warn('[useBIM4D] Erro ao aplicar cor de selecao:', err)
+      }
+    }
+
+    updateSelectionHighlight()
+  }, [selectedElementIds, model, is4DActive, apply4DVisuals, playerState.currentDate])
+
   // ─── Ações de Vínculo e Manipulação ──────────────────────────────────────
 
   function vincularSelecao() {
