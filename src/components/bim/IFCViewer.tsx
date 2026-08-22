@@ -679,15 +679,15 @@ export default function IFCViewer({ onIssueCreated, modelLabel, className = '', 
     setMode(newMode)
     const controls = world.camera.controls
 
-    if (newMode === 'orbit') {
-      controls.mouseButtons.left = 1
-      controls.mouseButtons.middle = 8
-      controls.mouseButtons.right = 2
+    if (newMode === 'orbit' || newMode === 'inspect') {
+      controls.mouseButtons.left = 1 // Botão esquerdo: Órbita ao arrastar e Seleção de peça ao clicar
+      controls.mouseButtons.middle = 8 // Botão do meio (Scroll): Pan / Arrastar tela
+      controls.mouseButtons.right = 2 // Botão direito: Pan alternativo
     } else if (newMode === 'pan') {
       controls.mouseButtons.left = 2
       controls.mouseButtons.middle = 8
       controls.mouseButtons.right = 1
-    } else if (newMode === 'section' || newMode === 'measure' || newMode === 'inspect') {
+    } else if (newMode === 'section' || newMode === 'measure') {
       controls.mouseButtons.left = 0
       controls.mouseButtons.middle = 8
       controls.mouseButtons.right = 1
@@ -1449,12 +1449,15 @@ export default function IFCViewer({ onIssueCreated, modelLabel, className = '', 
               onDrop={handleDrop}
               onDragOver={e => e.preventDefault()}
               onPointerDown={e => {
-                pointerDownPos.current = { x: e.clientX, y: e.clientY }
+                if (e.button === 0) {
+                  pointerDownPos.current = { x: e.clientX, y: e.clientY }
+                }
               }}
               onPointerUp={e => {
-                if (pointerDownPos.current) {
+                if (e.button === 0 && pointerDownPos.current) {
                   const dist = Math.hypot(e.clientX - pointerDownPos.current.x, e.clientY - pointerDownPos.current.y)
-                  if (dist < 6) {
+                  pointerDownPos.current = null
+                  if (dist < 8) {
                     handleCanvasClick(e)
                   }
                 }
