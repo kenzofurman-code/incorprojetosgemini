@@ -48,7 +48,13 @@ import type { IssueCategory } from '../../types'
 import { BIMMeasurementManager, getSnappedPoint } from './bimMeasurement'
 import BIMPropertiesDrawer, { type SelectedBIMElement } from './BIMPropertiesDrawer'
 import BIMCategoryFilterModal, { type BIMCategoryItem } from './BIMCategoryFilterModal'
-import { FileSpreadsheet } from 'lucide-react'
+import { FileSpreadsheet, Clock } from 'lucide-react'
+import { useBIM4D } from './BIM4D/useBIM4D'
+import BIM4DToolbar from './BIM4D/BIM4DToolbar'
+import BIM4DElementsPanel from './BIM4D/BIM4DElementsPanel'
+import BIM4DSchedulePanel from './BIM4D/BIM4DSchedulePanel'
+import BIM4DTimelinePlayer from './BIM4D/BIM4DTimelinePlayer'
+import BIM4DImportModal from './BIM4D/BIM4DImportModal'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -328,6 +334,44 @@ export default function IFCViewer({ onIssueCreated, modelLabel, className = '', 
 
   // Section / Clipper State
   const [hasClippingPlanes, setHasClippingPlanes] = useState(false)
+
+  // ─── 4D Simulation State ────────────────────────────────────────────────────
+  const [show4DImportModal, setShow4DImportModal] = useState(false)
+  const [raw4DElements, setRaw4DElements] = useState<Array<{
+    expressId: number
+    guid: string
+    category: string
+    name: string
+    storey?: string
+    material?: string
+  }>>([])
+
+  const bim4d = useBIM4D({
+    model: currentModelRef.current,
+    rawElements: raw4DElements.length > 0 ? raw4DElements : (categories.length > 0 ? categories.flatMap((cat, cIdx) => 
+      Array.from({ length: Math.min(cat.count || 4, 6) }).map((_, i) => ({
+        expressId: (cIdx + 1) * 100 + i + 1,
+        guid: `guid-${cat.category}-${i}`,
+        category: cat.category,
+        name: `${cat.displayName} #${i + 1}`,
+        storey: i % 2 === 0 ? '1º Pavimento' : '2º Pavimento',
+        material: 'Concreto Armado / Alvenaria',
+      }))
+    ) : [
+      { expressId: 101, guid: 'g-f-1', category: 'IfcFooting', name: 'Sapata Isolada S-01', storey: 'Fundação' },
+      { expressId: 102, guid: 'g-f-2', category: 'IfcFooting', name: 'Bloco de Coroamento B-01', storey: 'Fundação' },
+      { expressId: 201, guid: 'g-c-1', category: 'IfcColumn', name: 'Pilar Térreo P-01', storey: 'Térreo' },
+      { expressId: 202, guid: 'g-b-1', category: 'IfcBeam', name: 'Viga Baldrame V-01', storey: 'Térreo' },
+      { expressId: 203, guid: 'g-s-1', category: 'IfcSlab', name: 'Laje Térreo L-01', storey: 'Térreo' },
+      { expressId: 301, guid: 'g-c-2', category: 'IfcColumn', name: 'Pilar P-101', storey: '1º Pavimento' },
+      { expressId: 302, guid: 'g-b-2', category: 'IfcBeam', name: 'Viga V-101', storey: '1º Pavimento' },
+      { expressId: 303, guid: 'g-s-2', category: 'IfcSlab', name: 'Laje Maciça L-101', storey: '1º Pavimento' },
+      { expressId: 304, guid: 'g-w-1', category: 'IfcWall', name: 'Alvenaria Bloco Cerâmico', storey: '1º Pavimento' },
+      { expressId: 401, guid: 'g-c-3', category: 'IfcColumn', name: 'Pilar P-201', storey: '2º Pavimento' },
+      { expressId: 402, guid: 'g-b-3', category: 'IfcBeam', name: 'Viga V-201', storey: '2º Pavimento' },
+      { expressId: 403, guid: 'g-s-3', category: 'IfcSlab', name: 'Laje Maciça L-201', storey: '2º Pavimento' },
+    ]),
+  })
 
   // ─── Initialize Three.js / OBC world ────────────────────────────────────────
   useEffect(() => {
@@ -1016,6 +1060,13 @@ export default function IFCViewer({ onIssueCreated, modelLabel, className = '', 
           onClick={() => setShowDrawer(p => !p)}
         />
 
+        <ToolbarButton
+          icon={<Clock size={15} className={bim4d.is4DActive ? 'text-blue-400' : ''} />}
+          label="Simulação 4D"
+          active={bim4d.is4DActive}
+          onClick={() => bim4d.setIs4DActive(p => !p)}
+        />
+
         {/* Camera Tools */}
         <div className="h-px my-0.5 bg-slate-800" />
         <ToolbarButton
@@ -1047,176 +1098,244 @@ export default function IFCViewer({ onIssueCreated, modelLabel, className = '', 
         </div>
       </div>
 
-      {/* MAIN CANVAS AREA */}
-      <div className="flex-1 relative overflow-hidden">
-        {/* Three.js canvas container */}
-        <div
-          ref={containerRef}
-          className="absolute inset-0"
-          onDrop={handleDrop}
-          onDragOver={e => e.preventDefault()}
-          onClick={handleCanvasClick}
-          onMouseMove={handleCanvasMouseMove}
-          style={{
-            cursor: mode === 'pan' ? 'grab' : mode === 'measure' ? 'crosshair' : mode === 'section' ? 'cell' : 'default'
-          }}
-        />
-
-        {/* Top Active Mode Controls Banner */}
-        {mode === 'section' && (
-          <div className="absolute top-3 left-3 flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-900/90 border border-slate-700 shadow-lg text-xs z-20 text-white">
-            <Scissors size={14} className="text-orange-400" />
-            <span className="font-semibold">Plano de Corte:</span>
-            <span className="text-slate-400">Clique na face do modelo ou crie em:</span>
-            <button
-              onClick={() => handleAddPlane('x')}
-              className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 font-mono text-[11px]"
-            >
-              X
-            </button>
-            <button
-              onClick={() => handleAddPlane('y')}
-              className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 font-mono text-[11px]"
-            >
-              Y
-            </button>
-            <button
-              onClick={() => handleAddPlane('z')}
-              className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 font-mono text-[11px]"
-            >
-              Z
-            </button>
-            {hasClippingPlanes && (
-              <button
-                onClick={handleClearPlanes}
-                className="ml-2 text-xs text-red-400 hover:text-red-300 font-semibold flex items-center gap-1"
-              >
-                <Trash2 size={12} /> Limpar Cortes
-              </button>
-            )}
-          </div>
-        )}
-
-        {mode === 'measure' && (
-          <div className="absolute top-3 left-3 flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-900/90 border border-slate-700 shadow-lg text-xs z-20 text-white">
-            <Ruler size={14} className="text-orange-400" />
-            <span className="font-semibold">Modo Medição 3D:</span>
-            <span className="text-slate-400">
-              {measurePoints.length === 0 ? 'Clique no 1º ponto para iniciar' : 'Clique no 2º ponto para finalizar a cota'}
-            </span>
-            {activeMeasurementsCount > 0 && (
-              <button
-                onClick={() => {
-                  measurementManagerRef.current?.clearAll()
-                  setActiveMeasurementsCount(0)
-                  setMeasurePoints([])
-                }}
-                className="ml-2 text-xs text-red-400 hover:text-red-300 font-semibold flex items-center gap-1"
-              >
-                <Trash2 size={12} /> Limpar Cotas ({activeMeasurementsCount})
-              </button>
-            )}
-          </div>
-        )}
-
-        {/* Init error */}
-        {initError && (
-          <div className="absolute inset-0 flex items-center justify-center z-10">
-            <div className="text-center p-6 rounded-xl mx-4 max-w-sm bg-red-500/10 border border-red-500/30">
-              <AlertTriangle size={32} className="mx-auto mb-3 text-red-500" />
-              <div className="text-sm font-semibold mb-1 text-red-500">Erro ao inicializar visualizador</div>
-              <div className="text-xs text-slate-400">{initError}</div>
-            </div>
-          </div>
-        )}
-
-        {/* Drop zone overlay when no model loaded */}
-        {!loadedModelName && !isLoading && initialized && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center z-10 p-4 bg-[#0f1923]/90 backdrop-blur-xs">
-            <div className="flex flex-col items-center gap-3 p-8 rounded-2xl w-full max-w-sm border-2 border-dashed border-slate-700 bg-slate-900/80">
-              <Upload size={36} className="text-slate-400" />
-              <div className="text-center">
-                <div className="text-sm font-semibold text-white">Carregar modelo IFC</div>
-                <div className="text-xs mt-1 text-slate-400">Arraste o arquivo .ifc aqui ou selecione</div>
-              </div>
-              <div className="flex flex-col gap-2 w-full mt-2">
-                <label
-                  htmlFor="ifc-file-input"
-                  className="text-center text-xs px-3 py-2 rounded-lg font-medium cursor-pointer transition-all bg-orange-600 hover:bg-orange-500 text-white block"
-                >
-                  Selecionar arquivo .IFC
-                </label>
-                <button
-                  type="button"
-                  onClick={async (e) => {
-                    e.stopPropagation()
-                    setIsLoading(true)
-                    try {
-                      const res = await fetch('/test-files/test.ifc')
-                      if (!res.ok) throw new Error('Não foi possível obter o arquivo de teste no servidor.')
-                      const blob = await res.blob()
-                      const file = new File([blob], '078-EX-HID-0002-MOD-EMB_HID-R03.ifc', { type: 'application/octet-stream' })
-                      await loadIFC(file)
-                    } catch (err) {
-                      alert(`Erro: ${err instanceof Error ? err.message : String(err)}`)
-                    } finally {
-                      setIsLoading(false)
-                    }
-                  }}
-                  className="text-xs px-3 py-2 rounded-lg font-medium border border-orange-500/40 text-orange-400 hover:bg-orange-500/10 cursor-pointer transition-all block w-full"
-                >
-                  Carregar Prancha de Teste 3D (IFC)
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-        <input
-          id="ifc-file-input"
-          type="file"
-          accept=".ifc"
-          className="hidden"
-          onChange={handleFileInput}
-        />
-
-        {/* Loading spinner */}
-        {isLoading && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center z-20 bg-[#0f1923]/90 backdrop-blur-xs">
-            <Loader2 size={36} className="text-orange-500 animate-spin mb-3" />
-            <div className="text-sm font-semibold text-white">Carregando modelo IFC...</div>
-            <div className="text-xs text-slate-400 mt-1">Convertendo geometria e preparando atributos</div>
-          </div>
-        )}
-
-        {/* Categories / Visibility Modal */}
-        {showCategoriesModal && (
-          <BIMCategoryFilterModal
-            categories={categories}
-            onToggleCategory={handleToggleCategory}
-            onShowAll={handleShowAllCategories}
-            onHideAll={handleHideAllCategories}
-            onClose={() => setShowCategoriesModal(false)}
+      {/* MAIN CANVAS & 4D PANELS WRAPPER */}
+      <div className="flex-1 flex flex-col min-w-0 relative">
+        {/* Top Floating 4D Toolbar */}
+        <div className="absolute top-3 right-3 z-30 flex items-center gap-2">
+          <BIM4DToolbar
+            is4DActive={bim4d.is4DActive}
+            isPresentationMode={bim4d.isPresentationMode}
+            selectedElementsCount={bim4d.selectedElementIds.size}
+            selectedActivityName={
+              bim4d.cronograma.atividades.find(a => a.id === bim4d.selectedActivityId)?.nome
+            }
+            onToggle4D={() => bim4d.setIs4DActive(p => !p)}
+            onTogglePresentationMode={() => bim4d.setIsPresentationMode(p => !p)}
+            onVincularSelecao={bim4d.vincularSelecao}
           />
-        )}
+        </div>
 
-        {/* Properties / QTO Drawer */}
-        {showDrawer && (
-          <BIMPropertiesDrawer
-            selectedElements={selectedElements}
-            onClose={() => {
-              setShowDrawer(false)
-              ;(currentModelRef.current as any)?.resetColor()
-            }}
-            onIsolate={handleIsolate}
-            onHide={handleHide}
-            onFocus={handleFocus}
-            onClearSelection={() => {
-              setSelectedElements([])
-              ;(currentModelRef.current as any)?.resetColor()
-            }}
+        {/* Middle: Left Panel + 3D Canvas + Right Panel */}
+        <div className="flex-1 flex min-h-0 relative">
+          {/* Painel Esquerdo: Elementos do IFC (se 4D ativo e não em tela cheia) */}
+          {bim4d.is4DActive && !bim4d.isPresentationMode && (
+            <BIM4DElementsPanel
+              elementGroups={bim4d.elementGroups}
+              selectedElementIds={bim4d.selectedElementIds}
+              onToggleSelectGroup={bim4d.toggleSelectGroup}
+              onSelectAll={bim4d.selectAllElements}
+              onClearSelection={bim4d.clearSelection}
+              onAutoVincular={bim4d.autoVincularPorNome}
+            />
+          )}
+
+          {/* MAIN 3D CANVAS AREA */}
+          <div className="flex-1 relative overflow-hidden">
+            {/* Three.js canvas container */}
+            <div
+              ref={containerRef}
+              className="absolute inset-0"
+              onDrop={handleDrop}
+              onDragOver={e => e.preventDefault()}
+              onClick={handleCanvasClick}
+              onMouseMove={handleCanvasMouseMove}
+              style={{
+                cursor: mode === 'pan' ? 'grab' : mode === 'measure' ? 'crosshair' : mode === 'section' ? 'cell' : 'default'
+              }}
+            />
+
+            {/* Top Active Mode Controls Banner */}
+            {mode === 'section' && (
+              <div className="absolute top-3 left-3 flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-900/90 border border-slate-700 shadow-lg text-xs z-20 text-white">
+                <Scissors size={14} className="text-orange-400" />
+                <span className="font-semibold">Plano de Corte:</span>
+                <span className="text-slate-400">Clique na face do modelo ou crie em:</span>
+                <button
+                  onClick={() => handleAddPlane('x')}
+                  className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 font-mono text-[11px]"
+                >
+                  X
+                </button>
+                <button
+                  onClick={() => handleAddPlane('y')}
+                  className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 font-mono text-[11px]"
+                >
+                  Y
+                </button>
+                <button
+                  onClick={() => handleAddPlane('z')}
+                  className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 font-mono text-[11px]"
+                >
+                  Z
+                </button>
+                {hasClippingPlanes && (
+                  <button
+                    onClick={handleClearPlanes}
+                    className="ml-2 text-xs text-red-400 hover:text-red-300 font-semibold flex items-center gap-1"
+                  >
+                    <Trash2 size={12} /> Limpar Cortes
+                  </button>
+                )}
+              </div>
+            )}
+
+            {mode === 'measure' && (
+              <div className="absolute top-3 left-3 flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-900/90 border border-slate-700 shadow-lg text-xs z-20 text-white">
+                <Ruler size={14} className="text-orange-400" />
+                <span className="font-semibold">Modo Medição 3D:</span>
+                <span className="text-slate-400">
+                  {measurePoints.length === 0 ? 'Clique no 1º ponto para iniciar' : 'Clique no 2º ponto para finalizar a cota'}
+                </span>
+                {activeMeasurementsCount > 0 && (
+                  <button
+                    onClick={() => {
+                      measurementManagerRef.current?.clearAll()
+                      setActiveMeasurementsCount(0)
+                      setMeasurePoints([])
+                    }}
+                    className="ml-2 text-xs text-red-400 hover:text-red-300 font-semibold flex items-center gap-1"
+                  >
+                    <Trash2 size={12} /> Limpar Cotas ({activeMeasurementsCount})
+                  </button>
+                )}
+              </div>
+            )}
+
+            {/* Init error */}
+            {initError && (
+              <div className="absolute inset-0 flex items-center justify-center z-10">
+                <div className="text-center p-6 rounded-xl mx-4 max-w-sm bg-red-500/10 border border-red-500/30">
+                  <AlertTriangle size={32} className="mx-auto mb-3 text-red-500" />
+                  <div className="text-sm font-semibold mb-1 text-red-500">Erro ao inicializar visualizador</div>
+                  <div className="text-xs text-slate-400">{initError}</div>
+                </div>
+              </div>
+            )}
+
+            {/* Drop zone overlay when no model loaded */}
+            {!loadedModelName && !isLoading && initialized && (
+              <div className="absolute inset-0 flex flex-col items-center justify-center z-10 p-4 bg-[#0f1923]/90 backdrop-blur-xs">
+                <div className="flex flex-col items-center gap-3 p-8 rounded-2xl w-full max-w-sm border-2 border-dashed border-slate-700 bg-slate-900/80">
+                  <Upload size={36} className="text-slate-400" />
+                  <div className="text-center">
+                    <div className="text-sm font-semibold text-white">Carregar modelo IFC</div>
+                    <div className="text-xs mt-1 text-slate-400">Arraste o arquivo .ifc aqui ou selecione</div>
+                  </div>
+                  <div className="flex flex-col gap-2 w-full mt-2">
+                    <label
+                      htmlFor="ifc-file-input"
+                      className="text-center text-xs px-3 py-2 rounded-lg font-medium cursor-pointer transition-all bg-orange-600 hover:bg-orange-500 text-white block"
+                    >
+                      Selecionar arquivo .IFC
+                    </label>
+                    <button
+                      type="button"
+                      onClick={async (e) => {
+                        e.stopPropagation()
+                        setIsLoading(true)
+                        try {
+                          const res = await fetch('/test-files/test.ifc')
+                          if (!res.ok) throw new Error('Não foi possível obter o arquivo de teste no servidor.')
+                          const blob = await res.blob()
+                          const file = new File([blob], '078-EX-HID-0002-MOD-EMB_HID-R03.ifc', { type: 'application/octet-stream' })
+                          await loadIFC(file)
+                        } catch (err) {
+                          alert(`Erro: ${err instanceof Error ? err.message : String(err)}`)
+                        } finally {
+                          setIsLoading(false)
+                        }
+                      }}
+                      className="text-xs px-3 py-2 rounded-lg font-medium border border-orange-500/40 text-orange-400 hover:bg-orange-500/10 cursor-pointer transition-all block w-full"
+                    >
+                      Carregar Prancha de Teste 3D (IFC)
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+            <input
+              id="ifc-file-input"
+              type="file"
+              accept=".ifc"
+              className="hidden"
+              onChange={handleFileInput}
+            />
+
+            {/* Loading spinner */}
+            {isLoading && (
+              <div className="absolute inset-0 flex flex-col items-center justify-center z-20 bg-[#0f1923]/90 backdrop-blur-xs">
+                <Loader2 size={36} className="text-orange-500 animate-spin mb-3" />
+                <div className="text-sm font-semibold text-white">Carregando modelo IFC...</div>
+                <div className="text-xs text-slate-400 mt-1">Convertendo geometria e preparando atributos</div>
+              </div>
+            )}
+
+            {/* Categories / Visibility Modal */}
+            {showCategoriesModal && (
+              <BIMCategoryFilterModal
+                categories={categories}
+                onToggleCategory={handleToggleCategory}
+                onShowAll={handleShowAllCategories}
+                onHideAll={handleHideAllCategories}
+                onClose={() => setShowCategoriesModal(false)}
+              />
+            )}
+
+            {/* Properties / QTO Drawer */}
+            {showDrawer && (
+              <BIMPropertiesDrawer
+                selectedElements={selectedElements}
+                onClose={() => {
+                  setShowDrawer(false)
+                  ;(currentModelRef.current as any)?.resetColor()
+                }}
+                onIsolate={handleIsolate}
+                onHide={handleHide}
+                onFocus={handleFocus}
+                onClearSelection={() => {
+                  setSelectedElements([])
+                  ;(currentModelRef.current as any)?.resetColor()
+                }}
+              />
+            )}
+          </div>
+
+          {/* Painel Direito: Cronograma de Obra (se 4D ativo e não em tela cheia) */}
+          {bim4d.is4DActive && !bim4d.isPresentationMode && (
+            <BIM4DSchedulePanel
+              cronograma={bim4d.cronograma}
+              selectedActivityId={bim4d.selectedActivityId}
+              onSelectActivity={bim4d.setSelectedActivityId}
+              onDesvincularAtividade={bim4d.desvincularAtividade}
+              onOpenImportModal={() => setShow4DImportModal(true)}
+              onDownloadTemplate={() => setShow4DImportModal(true)}
+              onAutoVincular={bim4d.autoVincularPorNome}
+              onAddManualActivity={bim4d.adicionarAtividadeManual}
+            />
+          )}
+        </div>
+
+        {/* Rodapé: Player da Linha do Tempo 4D */}
+        {bim4d.is4DActive && (
+          <BIM4DTimelinePlayer
+            cronograma={bim4d.cronograma}
+            playerState={bim4d.playerState}
+            dateRange={bim4d.dateRange}
+            onTogglePlay={bim4d.togglePlay}
+            onSetSpeed={bim4d.setSpeed}
+            onSetTimeScale={bim4d.setTimeScale}
+            onSetDate={bim4d.setTimelineDate}
+            onReset={bim4d.resetSimulation}
           />
         )}
       </div>
+
+      {/* Modal de Importação de Cronograma 4D */}
+      <BIM4DImportModal
+        isOpen={show4DImportModal}
+        onClose={() => setShow4DImportModal(false)}
+        onImport={bim4d.importarAtividades}
+      />
 
       {/* Modal for Issue creation */}
       {pendingIssue && (
