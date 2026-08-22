@@ -313,6 +313,7 @@ export default function IFCViewer({ onIssueCreated, modelLabel, className = '', 
   const measurementManagerRef = useRef<BIMMeasurementManager | null>(null)
   const currentModelRef = useRef<FRAGS.FragmentsModel | null>(null)
   const clipperRef = useRef<OBC.Clipper | null>(null)
+  const pointerDownPos = useRef<{ x: number; y: number } | null>(null)
 
   const [mode, setMode] = useState<ViewerMode>('orbit')
   const [isLoading, setIsLoading] = useState(false)
@@ -1090,6 +1091,41 @@ export default function IFCViewer({ onIssueCreated, modelLabel, className = '', 
     }
   }, [raw4DElements])
 
+  // Isolamento de Peça Individual no 3D
+  const handleIsolateSingleItem = useCallback(async (expressId: number) => {
+    const model = currentModelRef.current
+    const world = worldRef.current
+    if (!model) return
+
+    const allIds = raw4DElements.map(e => e.expressId)
+    const otherIds = allIds.filter(id => id !== expressId)
+
+    if (otherIds.length > 0) {
+      await model.setVisible(otherIds, false)
+    }
+    await model.setVisible([expressId], true)
+    await (model as any).resetColor?.()
+    await model.setColor([expressId], new THREE.Color(0xf59e0b))
+
+    if (world) {
+      try {
+        const bbox = await model.getMergedBox([expressId])
+        if (bbox && !bbox.isEmpty()) {
+          const center = bbox.getCenter(new THREE.Vector3())
+          const size = bbox.getSize(new THREE.Vector3())
+          const maxDim = Math.max(size.x, size.y, size.z, 2)
+          await world.camera.controls.setLookAt(
+            center.x + maxDim * 1.5,
+            center.y + maxDim * 1.0,
+            center.z + maxDim * 1.5,
+            center.x, center.y, center.z,
+            true
+          )
+        }
+      } catch {}
+    }
+  }, [raw4DElements])
+
   // Restaurar todos os elementos no 3D
   const handleShowAll4D = useCallback(async () => {
     const model = currentModelRef.current
@@ -1393,11 +1429,13 @@ export default function IFCViewer({ onIssueCreated, modelLabel, className = '', 
               elementGroups={bim4d.elementGroups}
               selectedElementIds={bim4d.selectedElementIds}
               onToggleSelectGroup={bim4d.toggleSelectGroup}
+              onToggleSelectItem={(id) => bim4d.toggleSelectElement(id, false)}
               onSelectAll={bim4d.selectAllElements}
               onClearSelection={bim4d.clearSelection}
               onAutoVincular={bim4d.autoVincularPorNome}
               onIsolateStorey={handleIsolateStorey}
               onIsolateGroup={handleIsolateGroup}
+              onIsolateSingleItem={handleIsolateSingleItem}
               onShowAll={handleShowAll4D}
             />
           )}
@@ -1410,6 +1448,17 @@ export default function IFCViewer({ onIssueCreated, modelLabel, className = '', 
               className="absolute inset-0"
               onDrop={handleDrop}
               onDragOver={e => e.preventDefault()}
+              onPointerDown={e => {
+                pointerDownPos.current = { x: e.clientX, y: e.clientY }
+              }}
+              onPointerUp={e => {
+                if (pointerDownPos.current) {
+                  const dist = Math.hypot(e.clientX - pointerDownPos.current.x, e.clientY - pointerDownPos.current.y)
+                  if (dist < 6) {
+                    handleCanvasClick(e)
+                  }
+                }
+              }}
               onClick={handleCanvasClick}
               onMouseMove={handleCanvasMouseMove}
               style={{

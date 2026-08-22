@@ -10,7 +10,6 @@ import {
   ChevronRight,
   Sparkles,
   Eye,
-  EyeOff,
   RotateCcw,
 } from 'lucide-react'
 import type { BIMElementGroup } from '../../../types/bim4d'
@@ -19,11 +18,13 @@ export interface BIM4DElementsPanelProps {
   elementGroups: BIMElementGroup[]
   selectedElementIds: Set<number>
   onToggleSelectGroup: (group: BIMElementGroup) => void
+  onToggleSelectItem?: (expressId: number) => void
   onSelectAll: () => void
   onClearSelection: () => void
   onAutoVincular: () => void
   onIsolateStorey?: (storeyName: string) => void
   onIsolateGroup?: (group: BIMElementGroup) => void
+  onIsolateSingleItem?: (expressId: number) => void
   onShowAll?: () => void
 }
 
@@ -31,11 +32,13 @@ export default function BIM4DElementsPanel({
   elementGroups,
   selectedElementIds,
   onToggleSelectGroup,
+  onToggleSelectItem,
   onSelectAll,
   onClearSelection,
   onAutoVincular,
   onIsolateStorey,
   onIsolateGroup,
+  onIsolateSingleItem,
   onShowAll,
 }: BIM4DElementsPanelProps) {
   const [search, setSearch] = useState('')
@@ -80,7 +83,8 @@ export default function BIM4DElementsPanel({
         const matchesItems = g.items.some(
           it =>
             it.name.toLowerCase().includes(query) ||
-            (it.material || '').toLowerCase().includes(query)
+            (it.material || '').toLowerCase().includes(query) ||
+            String(it.expressId).includes(query)
         )
         if (!matchesGroup && !matchesItems) return false
       }
@@ -144,7 +148,7 @@ export default function BIM4DElementsPanel({
           <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
           <input
             type="text"
-            placeholder="Buscar peça, pavimento, material..."
+            placeholder="Buscar peça, pavimento, código #..."
             value={search}
             onChange={e => setSearch(e.target.value)}
             className="w-full pl-8 pr-3 py-1.5 text-xs rounded-lg bg-slate-900 border border-slate-700/70 text-slate-100 placeholder-slate-500 focus:outline-none focus:border-orange-500 transition-colors"
@@ -272,7 +276,7 @@ export default function BIM4DElementsPanel({
                         e.stopPropagation()
                         onToggleSelectGroup(group)
                       }}
-                      className="text-orange-400 hover:text-orange-300 flex-shrink-0"
+                      className="text-orange-400 hover:text-orange-300 flex-shrink-0 cursor-pointer"
                     >
                       {isGroupSelected ? (
                         <CheckSquare size={16} className="text-orange-500" />
@@ -306,7 +310,7 @@ export default function BIM4DElementsPanel({
                           e.stopPropagation()
                           onIsolateGroup(group)
                         }}
-                        className="p-1 rounded hover:bg-blue-500/20 text-slate-400 hover:text-blue-300 transition-colors"
+                        className="p-1 rounded hover:bg-blue-500/20 text-slate-400 hover:text-blue-300 transition-colors cursor-pointer"
                         title="Isolar este grupo no modelo 3D"
                       >
                         <Eye size={13} />
@@ -333,31 +337,80 @@ export default function BIM4DElementsPanel({
                         e.stopPropagation()
                         toggleExpandGroup(group.id)
                       }}
-                      className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-slate-200"
+                      className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-slate-200 cursor-pointer"
+                      title="Expandir para ver peças individuais"
                     >
                       {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                     </button>
                   </div>
                 </div>
 
-                {/* Itens detalhados do grupo (se expandido) */}
+                {/* Itens individuais detalhados do grupo (se expandido) */}
                 {isExpanded && (
-                  <div className="px-2.5 pb-2 pt-1 border-t border-slate-800/60 bg-slate-950/70 divide-y divide-slate-900 rounded-b-xl max-h-40 overflow-y-auto">
-                    {group.items.map(item => (
-                      <div
-                        key={item.expressId}
-                        className="py-1 flex items-center justify-between text-[10px] text-slate-300"
-                      >
-                        <span className="truncate pr-2 font-mono" title={item.name}>
-                          #{item.expressId} {item.name}
-                        </span>
-                        {item.material && (
-                          <span className="text-[9px] text-slate-500 flex-shrink-0">
-                            {item.material}
-                          </span>
-                        )}
-                      </div>
-                    ))}
+                  <div className="px-2 pb-2 pt-1 border-t border-slate-800/60 bg-slate-950/80 divide-y divide-slate-900 rounded-b-xl max-h-56 overflow-y-auto custom-scrollbar">
+                    <div className="py-1 px-1 text-[9px] font-bold text-slate-500 uppercase tracking-wider flex items-center justify-between">
+                      <span>Peças Individuais ({group.items.length})</span>
+                      <span>Ação</span>
+                    </div>
+                    {group.items.map(item => {
+                      const isItemChecked = selectedElementIds.has(item.expressId)
+
+                      return (
+                        <div
+                          key={item.expressId}
+                          onClick={() => onToggleSelectItem?.(item.expressId)}
+                          className={`py-1.5 px-1 flex items-center justify-between gap-2 text-[10px] rounded transition-colors cursor-pointer ${
+                            isItemChecked
+                              ? 'bg-orange-500/15 text-orange-200 font-semibold'
+                              : 'text-slate-300 hover:bg-slate-900/90'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2 min-w-0">
+                            <button
+                              type="button"
+                              onClick={e => {
+                                e.stopPropagation()
+                                onToggleSelectItem?.(item.expressId)
+                              }}
+                              className="text-orange-400 hover:text-orange-300 flex-shrink-0"
+                            >
+                              {isItemChecked ? (
+                                <CheckSquare size={13} className="text-orange-500" />
+                              ) : (
+                                <Square size={13} className="text-slate-600" />
+                              )}
+                            </button>
+
+                            <div className="min-w-0">
+                              <div className="truncate font-medium" title={item.name}>
+                                <span className="font-mono text-slate-400 mr-1">#{item.expressId}</span>
+                                <span>{item.name}</span>
+                              </div>
+                              {item.material && (
+                                <div className="text-[9px] text-slate-500 truncate">
+                                  {item.material}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Botão de Isolar Peça Individual no 3D */}
+                          {onIsolateSingleItem && (
+                            <button
+                              type="button"
+                              onClick={e => {
+                                e.stopPropagation()
+                                onIsolateSingleItem(item.expressId)
+                              }}
+                              className="p-1 rounded hover:bg-blue-500/20 text-slate-400 hover:text-blue-300 transition-colors flex-shrink-0"
+                              title={`Isolar apenas a peça #${item.expressId} no 3D`}
+                            >
+                              <Eye size={12} />
+                            </button>
+                          )}
+                        </div>
+                      )
+                    })}
                   </div>
                 )}
               </div>
