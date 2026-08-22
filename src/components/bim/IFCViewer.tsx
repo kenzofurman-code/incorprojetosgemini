@@ -480,19 +480,30 @@ export default function IFCViewer({ onIssueCreated, modelLabel, className = '', 
     }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ─── Extract categories from model ──────────────────────────────────────────
+  // ─── Extract categories and real items from model ──────────────────────────
   const extractCategories = useCallback(async (model: FRAGS.FragmentsModel) => {
     try {
       const rawCategories = await model.getCategories()
       const list: BIMCategoryItem[] = []
+      const allItemsList: Array<{
+        expressId: number
+        guid: string
+        category: string
+        name: string
+        storey?: string
+        material?: string
+      }> = []
 
       for (const catName of rawCategories) {
         let count = 0
+        let itemIds: number[] = []
         try {
           const idsMap = await model.getItemsOfCategories([new RegExp(`^${catName}$`, 'i')])
           if (idsMap && (idsMap as any)[catName]) {
-            count = (idsMap as any)[catName].length
+            itemIds = (idsMap as any)[catName]
+            count = itemIds.length
           } else if (Array.isArray(idsMap)) {
+            itemIds = idsMap
             count = idsMap.length
           }
         } catch { /* ignore count error */ }
@@ -505,12 +516,49 @@ export default function IFCViewer({ onIssueCreated, modelLabel, className = '', 
           count,
           visible: true,
         })
+
+        // Extrai dados detalhados para cada elemento do modelo
+        if (itemIds.length > 0) {
+          try {
+            const dataList = await model.getItemsData(itemIds, {
+              attributes: ['Name', 'GlobalId', 'Tag', 'Description'],
+            })
+            itemIds.forEach((id, idx) => {
+              const d = (dataList && dataList[idx]) ? (dataList[idx] as any) : {}
+              const guid = d.GlobalId?.value || d.guid || `guid-${catName}-${id}`
+              const name = d.Name?.value || d.name || `${displayName} #${id}`
+              const storey = d.storey || 'Pavimento Tipo'
+              allItemsList.push({
+                expressId: id,
+                guid,
+                category: catName,
+                name,
+                storey,
+                material: d.material || 'Padrão IFC',
+              })
+            })
+          } catch {
+            itemIds.forEach(id => {
+              allItemsList.push({
+                expressId: id,
+                guid: `guid-${catName}-${id}`,
+                category: catName,
+                name: `${displayName} #${id}`,
+                storey: 'Pavimento Tipo',
+                material: 'Padrão IFC',
+              })
+            })
+          }
+        }
       }
 
       list.sort((a, b) => b.count - a.count)
       setCategories(list)
+      if (allItemsList.length > 0) {
+        setRaw4DElements(allItemsList)
+      }
     } catch (err) {
-      console.warn('[IFCViewer] Erro ao extrair categorias:', err)
+      console.warn('[IFCViewer] Erro ao extrair categorias e itens:', err)
     }
   }, [])
 
@@ -691,20 +739,31 @@ export default function IFCViewer({ onIssueCreated, modelLabel, className = '', 
       return
     }
 
-    // ── MODE: INSPECT / ORBIT (Selection & QTO) ──
-    if (mode === 'inspect' || mode === 'orbit') {
+    // ── MODE: INSPECT / ORBIT / 4D (Selection & QTO) ──
+    if (mode === 'inspect' || mode === 'orbit' || bim4d.is4DActive) {
       let localId = res && typeof res.localId === 'number' ? res.localId : null
 
       // Fallback localId extraction from Fragment mesh if res.localId is null
       if (localId === null && hit?.object) {
         try {
-          const itemIds = (hit.object as any)?.fragment?.itemIds || (hit.object as any)?.userData?.itemIds
-          if (itemIds && itemIds.length > 0) localId = itemIds[0]
+          const mesh = hit.object as any
+          if (mesh.fragment && typeof mesh.fragment.getItemID === 'function' && typeof (hit as any).instanceId === 'number') {
+            localId = mesh.fragment.getItemID((hit as any).instanceId)
+          } else if (mesh.fragment?.itemIds && typeof (hit as any).instanceId === 'number' && mesh.fragment.itemIds[(hit as any).instanceId] !== undefined) {
+            localId = mesh.fragment.itemIds[(hit as any).instanceId]
+          } else if (mesh.userData?.itemIds && mesh.userData.itemIds.length > 0) {
+            localId = mesh.userData.itemIds[0]
+          }
         } catch { /* ignore */ }
       }
 
       if (localId !== null) {
         const isShift = e.shiftKey
+
+        // Se o modo 4D estiver ativo, atualiza a seleção do 4D
+        if (bim4d.is4DActive) {
+          bim4d.toggleSelectElement(localId, isShift)
+        }
 
         let category = 'Elemento IFC'
         let name = `Elemento #${localId}`
@@ -781,10 +840,12 @@ export default function IFCViewer({ onIssueCreated, modelLabel, className = '', 
           await model.setColor([localId], HIGHLIGHT_COLOR)
         }
 
-        setShowDrawer(true)
+        if (!bim4d.is4DActive) {
+          setShowDrawer(true)
+        }
       }
     }
-  }, [mode, measurePoints])
+  }, [mode, measurePoints, bim4d.is4DActive, bim4d.toggleSelectElement])
 
   // Mouse move for 3D measurement preview line & magnetic snap indicator
   const handleCanvasMouseMove = useCallback((e: React.MouseEvent<HTMLDivElement>) => {

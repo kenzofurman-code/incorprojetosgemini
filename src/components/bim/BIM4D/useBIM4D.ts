@@ -443,6 +443,18 @@ export function useBIM4D({ model, rawElements }: UseBIM4DProps) {
     }))
   }
 
+  function toggleSelectElement(expressId: number, isShift?: boolean) {
+    setSelectedElementIds(prev => {
+      const next = isShift ? new Set(prev) : new Set<number>()
+      if (prev.has(expressId) && isShift) {
+        next.delete(expressId)
+      } else {
+        next.add(expressId)
+      }
+      return next
+    })
+  }
+
   return {
     is4DActive,
     setIs4DActive,
@@ -452,6 +464,7 @@ export function useBIM4D({ model, rawElements }: UseBIM4DProps) {
     selectedActivityId,
     setSelectedActivityId,
     selectedElementIds,
+    setSelectedElementIds,
     elementGroups,
     playerState,
     dateRange,
@@ -460,6 +473,7 @@ export function useBIM4D({ model, rawElements }: UseBIM4DProps) {
     desvincularAtividade,
     autoVincularPorNome,
     toggleSelectGroup,
+    toggleSelectElement,
     selectAllElements,
     clearSelection,
     setTimelineDate,
