@@ -124,7 +124,7 @@ const IFC_CATEGORY_LABELS: Record<string, string> = {
   IFCREINFORCINGBAR: 'Armaduras / Vergalhões',
 }
 
-const HIGHLIGHT_COLOR = new THREE.Color(0xf97316)
+const HIGHLIGHT_COLOR = new THREE.Color(0x0ea5e9) // Azul Elétrico Vibrante ao selecionar elementos
 
 // ─── Toolbar Button ───────────────────────────────────────────────────────────
 function ToolbarButton({
@@ -398,7 +398,7 @@ export default function IFCViewer({ onIssueCreated, modelLabel, className = '', 
         // Scene
         world.scene = new OBC.SimpleScene(components)
         world.scene.setup()
-        world.scene.three.background = new THREE.Color(0x0f1923)
+        world.scene.three.background = new THREE.Color(0x383e4a) // Studio BIM Gray (melhor contraste arquitetônico)
 
         // Renderer
         world.renderer = new OBC.SimpleRenderer(components, containerRef.current!, {
@@ -638,8 +638,9 @@ export default function IFCViewer({ onIssueCreated, modelLabel, className = '', 
       currentModelRef.current = model
 
       world.scene.three.add(model.object)
+      model.object.updateMatrixWorld(true)
 
-      // Criar arestas arquitetônicas (linhas de contorno pretas/grafite em vigas, pilares e lajes)
+      // Criar arestas arquitetônicas nítidas (linhas de contorno pretas/grafite em vigas, pilares e lajes)
       const edgesGroup = new THREE.Group()
       edgesGroup.name = 'BIM_EDGES'
 
@@ -647,49 +648,44 @@ export default function IFCViewer({ onIssueCreated, modelLabel, className = '', 
         if (child instanceof THREE.Mesh) {
           world.meshes.add(child)
 
-          // Ajuste de materiais para evitar superexposição plana
-          if (child.material) {
-            const mats = Array.isArray(child.material) ? child.material : [child.material]
-            for (const m of mats) {
-              if (m && typeof m === 'object') {
-                if ('roughness' in m) (m as any).roughness = 0.6
-                if ('metalness' in m) (m as any).metalness = 0.05
-              }
-            }
-          }
-
           // Arestas para InstancedMesh e Mesh comum
           if (child instanceof THREE.InstancedMesh && child.geometry) {
             try {
-              const edgesGeom = new THREE.EdgesGeometry(child.geometry, 24)
+              const edgesGeom = new THREE.EdgesGeometry(child.geometry, 20)
               const edgeMat = new THREE.LineBasicMaterial({
-                color: 0x334155,
+                color: 0x0f172a, // Grafite escuro / Preto nítido
                 transparent: true,
-                opacity: 0.5,
+                opacity: 0.85,
+                depthTest: true,
               })
               for (let i = 0; i < child.count; i++) {
                 const mat = new THREE.Matrix4()
                 child.getMatrixAt(i, mat)
                 const lines = new THREE.LineSegments(edgesGeom, edgeMat)
                 lines.applyMatrix4(mat)
+                lines.applyMatrix4(child.matrixWorld)
                 lines.raycast = () => {}
                 edgesGroup.add(lines)
               }
-            } catch {}
+            } catch (e) {
+              console.warn('[Edges] instanced mesh error:', e)
+            }
           } else if (child.geometry && !(child instanceof THREE.LineSegments)) {
             try {
-              const edgesGeom = new THREE.EdgesGeometry(child.geometry, 24)
+              const edgesGeom = new THREE.EdgesGeometry(child.geometry, 20)
               const edgeMat = new THREE.LineBasicMaterial({
-                color: 0x334155,
+                color: 0x0f172a,
                 transparent: true,
-                opacity: 0.5,
+                opacity: 0.85,
+                depthTest: true,
               })
               const lines = new THREE.LineSegments(edgesGeom, edgeMat)
-              lines.matrixAutoUpdate = false
-              lines.matrix.copy(child.matrixWorld)
+              lines.applyMatrix4(child.matrixWorld)
               lines.raycast = () => {}
               edgesGroup.add(lines)
-            } catch {}
+            } catch (e) {
+              console.warn('[Edges] mesh error:', e)
+            }
           }
         }
       })
